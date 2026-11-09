@@ -2,7 +2,7 @@
 
 An MCP server for CrowdSmart. It connects an MCP client (for example Claude Desktop, Claude Code, Cursor or Hermes) to the CrowdSmart research platform (csgcip). It authenticates with your own CrowdSmart API key.
 
-The server has 48 tools. They cover three workflows:
+The server has 51 tools. They cover three workflows:
 
 - Knowledge Agents that answer questions from their documents.
 - Jams in which Knowledge Agents discuss a topic.
@@ -18,7 +18,7 @@ Each tool tells the client what it does to your CrowdSmart data (MCP tool annota
 |---|---|
 | Reads | Changes nothing |
 | Adds | Adds a record, for example a document or a Jam |
-| Replaces | Replaces or deletes settings, a document, a review or a build |
+| Replaces | Replaces or deletes settings, a document, a review, a case profile value or a build |
 | Queues | Changes nothing that you see, but can queue model calls on CrowdSmart's worker. A repeated call queues nothing new |
 
 ### Knowledge Agents
@@ -86,7 +86,8 @@ A KMA is a Knowledge Agent with one or more perspective models. Each model is a 
 | `list_kma_domains` | Lists every domain, with its outcome, cases and KMAs | Reads |
 | `get_kma_domain` | Shows a domain: its outcome, case fields, base-rate table, cases and KMAs | Reads |
 | `create_kma_domain` | Creates a domain that you own | Adds |
-| `add_kma_case` | Adds a case to a domain. You cannot change or remove a case | Adds |
+| `add_kma_case` | Adds a case to a domain. You cannot remove a case | Adds |
+| `set_kma_case_profile` | Sets one profile field of an open case, for example its subject | Replaces |
 | `resolve_kma_case` | Records the outcome of a case. You cannot undo this | Adds |
 | `mark_kma_case_unscored` | Marks a case as not scored, for example when the decision came before the freeze. You cannot undo this | Adds |
 | `get_kma_scoreboard` | Scores the frozen forecasts of a domain: hits, Brier score and log loss, by KMA | Reads |
@@ -115,13 +116,13 @@ A KMA is a Knowledge Agent with one or more perspective models. Each model is a 
 
 To build a KMA and forecast a case:
 
-1. Find or create a domain with `list_kma_domains` or `create_kma_domain`. Add its cases with `add_kma_case`.
+1. Find or create a domain with `list_kma_domains` or `create_kma_domain`. Add its cases with `add_kma_case`. If the domain has a `subject_field`, the models published on it read each case's evidence a whole document at a time, about the case's subject.
 2. Create the KMA on the domain with `create_kma`. If it stops partway, it gives the agent's ID: finish with `enable_kma` or `attach_kma_to_domain` instead of creating another agent.
 3. Add its domain sources with `add_text_document` or `upload_document`. Add the evidence for each case in the same way.
 4. Read each extraction with `read_kma_extraction` and compare it with the original. This is the text that the KMA reads: headers are removed, the text is cleaned and near-duplicate passages are left out, so it can differ from `read_document`. Then approve it with `review_kma_document`, giving the digest that `read_kma_extraction` returned.
 5. Tag each document with `tag_kma_document`: `domain` for a domain source, or `case` with its case ID. Give its publication date.
 6. Check the KMA with `check_kma_build_preflight`. Then start the build with `start_kma_build`, with a perspective name and a brief.
-7. Follow the build with `get_kma_builds`. When it waits for you, decide with `decide_kma_build`: choose the variables, check the structure, then publish. If it waits for `take_published`, another perspective was published with a different definition of one of its variables: revise or stop the build.
+7. Follow the build with `get_kma_builds`. When it waits for you, decide with `decide_kma_build`: choose the variables, check the structure, then publish. Each build lists the actions it accepts now in `next_actions`. To reject a structure, stop or revise the build. If it waits for `take_published`, another perspective was published with a different definition of one of its variables: revise or stop the build.
 8. Read the forecast for a case with `get_kma_forecast`. When no readings wait, freeze it with `freeze_kma_forecast`.
 9. When the case resolves, record the outcome with `resolve_kma_case`. Then compare the scores with `get_kma_scoreboard`.
 

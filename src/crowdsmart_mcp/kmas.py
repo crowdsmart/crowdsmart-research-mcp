@@ -68,6 +68,21 @@ def _base_rate_summary(base_rate: dict[str, Any] | None) -> dict[str, Any] | Non
     }
 
 
+def _case(case: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "case_id": case["case_id"],
+        "title": case["title"],
+        "question": case["question"],
+        "as_of": case["as_of"],
+        "profile": case["profile"],
+        "bindings": case.get("bindings") or {},
+        "resolution_criterion": case["resolution_criterion"],
+        "practice": case.get("practice", False),
+        "resolution": case.get("resolution"),
+        "not_scored": case.get("unscored"),
+    }
+
+
 @mcp.tool(annotations=READS)
 async def get_kma_domain(domain_id: Id) -> dict[str, Any]:
     """Show a KMA domain: its outcome, profile fields, base-rate table, cases and KMAs.
@@ -75,7 +90,8 @@ async def get_kma_domain(domain_id: Id) -> dict[str, Any]:
     Each case shows its question, profile, as-of date, resolution criterion and,
     once decided, its resolution or why it is not scored. "practice" cases are
     forecast and resolved like the others but never scored. The base-rate table
-    is summarized: its rules and number of rows.
+    is summarized: its rules and number of rows. "subject_field" is the profile
+    field that names each case's subject, or null.
 
     Args:
         domain_id: Domain ID, from list_kma_domains.
@@ -91,23 +107,10 @@ async def get_kma_domain(domain_id: Id) -> dict[str, Any]:
         "yours": domain["owner"] == user["user_id"],
         "outcome": domain["outcome"],
         "profile_fields": domain["profile_fields"],
+        "subject_field": domain.get("subject_field"),
         "template_fields": domain.get("template_fields") or [],
         "base_rate": _base_rate_summary(domain.get("base_rate")),
-        "cases": [
-            {
-                "case_id": case["case_id"],
-                "title": case["title"],
-                "question": case["question"],
-                "as_of": case["as_of"],
-                "profile": case["profile"],
-                "bindings": case.get("bindings") or {},
-                "resolution_criterion": case["resolution_criterion"],
-                "practice": case.get("practice", False),
-                "resolution": case.get("resolution"),
-                "not_scored": case.get("unscored"),
-            }
-            for case in state["cases"].values()
-        ],
+        "cases": [_case(case) for case in state["cases"].values()],
         "kma_ids": state["kmas"],
     }
 
@@ -141,6 +144,7 @@ async def create_kma_domain(
     description: str = "",
     template_fields: list[str] | None = None,
     base_rate: dict[str, Any] | None = None,
+    subject_field: str | None = None,
 ) -> dict[str, Any]:
     """Create a KMA domain that you own: a kind of decision, with its outcome and case profile.
 
@@ -162,6 +166,11 @@ async def create_kma_domain(
             table, rules, cell_fields, theta_grid, population), for a two-state
             outcome. Without one, each forecast starts from the model's elicited
             prior and says so.
+        subject_field: The key of a text profile field that names each case's
+            subject, for example the drug or the company. A model published on
+            the domain then reads each case's evidence a whole document at a
+            time, about that subject, and every case needs a value for it.
+            Without one, evidence is read passage by passage.
     """
     body: dict[str, Any] = {
         "name": name,
@@ -172,6 +181,8 @@ async def create_kma_domain(
     }
     if base_rate is not None:
         body["base_rate"] = base_rate
+    if subject_field is not None:
+        body["subject_field"] = subject_field
     result = await api.call("POST", DOMAINS, json=body)
     return {"id": result["id"], "name": result["domain"]["name"]}
 
@@ -190,8 +201,9 @@ async def add_kma_case(
 ) -> dict[str, Any]:
     """Add a case to a KMA domain: one question that resolves from a public record.
 
-    A case cannot be changed or removed once added. Evidence for it is admitted
-    only if it was published on or before the as-of date.
+    A case cannot be removed once added, and only its profile can change, with
+    set_kma_case_profile while it is open. Evidence for it is admitted only if
+    it was published on or before the as-of date.
 
     Args:
         domain_id: A domain you own, or one that a KMA of yours is attached to.
@@ -217,6 +229,25 @@ async def add_kma_case(
         "practice": practice,
     }
     return await api.call("POST", f"{DOMAINS}/{domain_id}/cases", json=body)
+
+
+@mcp.tool(annotations=CHANGES)
+async def set_kma_case_profile(
+    domain_id: Id, case_id: Id, field: str, value: Any
+) -> dict[str, Any]:
+    """Set one profile field of an open case, for example its subject. It replaces the field's earlier value.
+
+    A forecast already frozen keeps the case as it was when it was frozen.
+
+    Args:
+        domain_id: A domain you own, or one that a KMA of yours is attached to.
+        case_id: An open case of the domain.
+        field: One of the domain's profile fields, from get_kma_domain.
+        value: The field's new value, of the field's type.
+    """
+    path = f"{DOMAINS}/{domain_id}/cases/{case_id}/profile"
+    result = await api.call("POST", path, json={"field": field, "value": value})
+    return _case(result["case"])
 
 
 @mcp.tool(annotations=ADDS)
@@ -429,9 +460,9 @@ async def attach_kma_to_domain(agent_id: Id, domain_id: str) -> dict[str, Any]:
     """Attach a KMA you own to a domain. This cannot be undone here.
 
     A KMA works on one domain, and the domain's jobs act on every KMA attached to
-    it. Check the domain's name first. Attach only a KMA: a Knowledge Agent that
-    is not one (see enable_kma) can stop the domain's case evidence from being
-    read.
+    it. Check the domain's name first. Only a KMA can be attached: make a
+    Knowledge Agent a KMA with enable_kma first. Attaching again to the same
+    domain is safe.
 
     Args:
         agent_id: ID of a KMA you own, from list_kmas or create_kma.
@@ -711,7 +742,10 @@ def _build(state: dict[str, Any]) -> dict[str, Any]:
 async def get_kma_builds(agent_id: Id) -> dict[str, Any]:
     """Show a KMA's builds: each one's stage, what it waits for, and what you decide from.
 
-    "awaiting" names the decision that a build waits for:
+    "next_actions" lists what decide_kma_build can do to a build now: the
+    decision it waits for, when there is one, then revise and stop. A published
+    or stopped build can only be revised. "awaiting" names the screen that a
+    build is on:
     - "accept_variables": choose four to six of stages.S1.proposals, rewording
       each definition to refer to one case before the decision.
     - "accept_definitions": accept stages.S2.definitions.
@@ -766,43 +800,35 @@ async def decide_kma_build(
 ) -> dict[str, Any]:
     """Make the owner's decision at a stage of a KMA build. Decide only as the user decides.
 
-    Each accept action and publish apply only when get_kma_builds shows the
-    build "awaiting" it; stop and revise apply to any open build:
+    Use only an action that get_kma_builds lists in the build's "next_actions":
     - "accept_variables": accept is the list of chosen proposal keys (four to
       six); edits rewords their definitions (10 to 400 characters each).
     - "accept_definitions": accept is the list of definition keys to keep; edits
       as above.
-    - "accept_structure": accept is required: true accepts the structure, false
-      rejects it and stops the build. parents, optional, replaces the
+    - "accept_structure": accept is true. parents, optional, replaces the
       structure: each variable and the outcome with their parents, at most
       three each, and every variable must reach the outcome. polarity sets link
-      signs, keyed "parent->child".
+      signs, keyed "parent->child". To reject the structure, stop or revise
+      the build.
     - "publish": the perspective joins the KMA's published model, and readings
       of the domain's open cases are queued.
     - "stop": end the build. This cannot be undone.
-    - "revise": stop the build and start a new one at the variables, with its
-      choices carried over (the result is the new build). Use it when the build
-      awaits "take_published" or "stop_or_restart".
+    - "revise": start a new build at the variables, with this build's
+      perspective, brief, choices and wording carried over, and stop this one
+      if it is open. The result is the new build. Use it when the build awaits
+      "take_published" or "stop_or_restart", or to rebuild a published
+      perspective.
 
     Args:
         agent_id: ID of a KMA you own.
         build_id: Build ID, from get_kma_builds (for example "b1").
         action: The decision.
         accept: The accepted keys for accept_variables and accept_definitions;
-            true or false for accept_structure.
+            true for accept_structure.
         edits: New definitions, by variable key.
         parents: The structure that you set, for accept_structure.
         polarity: Link signs, for accept_structure.
     """
-    if action in ("accept_variables", "accept_definitions") and not isinstance(
-        accept, list
-    ):
-        raise ToolError(f"{action} needs accept: the list of keys that the user chose.")
-    if action == "accept_structure" and not isinstance(accept, bool):
-        raise ToolError(
-            "accept_structure needs accept: true to accept the structure, or false "
-            + "to reject it, which stops the build. Ask the user which."
-        )
     path = f"{_kma(agent_id)}/v2/build/{build_id}"
     if action == "revise":
         return _build(await api.call("POST", f"{path}/revise", json={}))

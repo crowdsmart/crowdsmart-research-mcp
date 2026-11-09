@@ -129,6 +129,7 @@ async def test_get_kma_domain_summarizes_the_base_rate_table(api: FakeApi):
         "rules": base_rate["rules"],
         "cell_fields": {},
     }
+    assert content["subject_field"] is None
     assert content["cases"][0]["practice"] is True
     assert content["cases"][0]["not_scored"] is None
 
@@ -150,6 +151,53 @@ async def test_create_kma_domain_omits_an_absent_base_rate(api: FakeApi):
         "profile_fields": fields,
         "template_fields": [],
     }
+
+
+async def test_create_kma_domain_sends_its_subject_field(api: FakeApi):
+    routes, requests = api
+    routes["POST", DOMAINS] = ok({"id": "fda_1a2b3c", "domain": {"name": "FDA"}})
+    fields = {"drug": {"type": "text", "description": "the drug under review"}}
+
+    _ = await call_tool(
+        "create_kma_domain",
+        name="FDA",
+        outcome=OUTCOME,
+        profile_fields=fields,
+        subject_field="drug",
+    )
+
+    assert sent(requests, "POST", DOMAINS)["subject_field"] == "drug"
+
+
+async def test_set_kma_case_profile_returns_the_case(api: FakeApi):
+    routes, requests = api
+    path = f"{DOMAINS}/fda/cases/c1/profile"
+    case = {
+        "case_id": "c1",
+        "title": "Orforglipron",
+        "question": "Approved by 15 April?",
+        "as_of": "2026-03-31",
+        "profile": {"drug": "orforglipron"},
+        "bindings": {},
+        "resolution_criterion": "The FDA's letter.",
+        "practice": False,
+        "resolution": None,
+        "unscored": None,
+    }
+    routes["POST", path] = ok({"case": case})
+
+    result = await call_tool(
+        "set_kma_case_profile",
+        domain_id="fda",
+        case_id="c1",
+        field="drug",
+        value="orforglipron",
+    )
+
+    assert sent(requests, "POST", path) == {"field": "drug", "value": "orforglipron"}
+    content = result.structured_content
+    assert content["profile"] == {"drug": "orforglipron"}
+    assert content["not_scored"] is None
 
 
 async def test_create_kma_makes_an_agent_a_kma_on_its_domain(api: FakeApi):
@@ -562,27 +610,22 @@ async def test_decide_kma_build_posts_each_action(
     assert sent(requests, "POST", f"{KMA}/v2/build{path}") == body
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"action": "accept_structure"},
-        {"action": "accept_structure", "accept": ["a"]},
-        {"action": "accept_variables"},
-        {"action": "accept_variables", "accept": True},
-        {"action": "accept_definitions", "accept": False},
-    ],
-)
-async def test_decide_kma_build_needs_the_right_accept(
-    api: FakeApi, arguments: dict[str, object]
-):
-    _, requests = api
-
-    result = await call_tool(
-        "decide_kma_build", agent_id="a1", build_id="b1", **arguments
+async def test_decide_kma_build_never_fills_in_a_missing_accept(api: FakeApi):
+    routes, requests = api
+    refusal = (
+        "accept_structure needs accept: true; to reject the structure, "
+        + "stop or revise the build"
+    )
+    routes["POST", f"{KMA}/v2/build/b1/accept_structure"] = httpx2.Response(
+        409, json={"detail": refusal}
     )
 
-    assert f"{arguments['action']} needs accept" in error_text(result)
-    assert not requests
+    result = await call_tool(
+        "decide_kma_build", agent_id="a1", build_id="b1", action="accept_structure"
+    )
+
+    assert sent(requests, "POST", f"{KMA}/v2/build/b1/accept_structure") == {}
+    assert error_text(result).endswith(f"CrowdSmart API error 409: {refusal}")
 
 
 async def test_get_kma_builds_leaves_out_refits_and_revisions(api: FakeApi):
