@@ -186,14 +186,16 @@ async def _jam_you_created(jam_id: str, action: str) -> dict[str, Any]:
 async def launch_jam(jam_id: Id, send_invitations: bool = True) -> dict[str, Any]:
     """Launch a draft Jam you created. This cannot be undone.
 
-    The Jam becomes active, and each invitee gets an invitation email. Its
-    Knowledge Agents start in the background: every agent responds to the first
-    prompt, then reviews the other responses. Follow them with get_jam_results.
-    Check the draft with get_jam first.
+    The Jam becomes active, and each invitee gets an invitation email. You, the
+    creator, are always invited too, and also get the email. Its Knowledge
+    Agents start in the background: every agent responds to the first prompt,
+    then reviews the other responses. An agent whose documents do not cover the
+    prompt abstains, unless it allows general-knowledge backfill. Follow them
+    with get_jam_results. Check the draft with get_jam first.
 
     Args:
         jam_id: ID of a draft Jam you created.
-        send_invitations: Send the invitation emails (default true).
+        send_invitations: Send the invitation emails, yours included (default true).
     """
     jam = await _jam_you_created(jam_id, "launch it")
     # A launch cannot be undone, so check the status before the launch request.

@@ -66,7 +66,7 @@ In the Jam, each agent responds to the prompt. Then each agent reviews the respo
 
 Knowledge Agents answer only the first prompt of a Jam. For more questions, use one Jam for each question.
 
-The tools act as the owner of your API key. Only the creator of a Jam can launch it or add agents to it.
+The tools act as the owner of your API key. Only the creator of a Jam can launch it or add agents to it. The creator is always invited to the Jam and, if invitations are sent, gets the invitation email too.
 
 ## Requirements
 
