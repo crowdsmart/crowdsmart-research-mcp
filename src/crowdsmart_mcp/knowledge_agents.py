@@ -416,6 +416,9 @@ async def check_corpus_quality(agent_id: Id) -> dict[str, Any]:
     Damaged text makes an agent miss topics its documents hold. The check flags
     text broken one word per line, garbled OCR, words split by stray spaces and
     near-duplicate documents. It returns a summary and the flagged documents only.
+    "unrecorded_uploads" lists uploads that stopped after storing passages but
+    before recording the document: the agent does not use them, so upload the
+    file again.
 
     Args:
         agent_id: Knowledge Agent ID.
@@ -426,4 +429,8 @@ async def check_corpus_quality(agent_id: Id) -> dict[str, Any]:
         for document in report["documents"]
         if document["severity"] != "healthy"
     ]
-    return {"summary": report["summary"], "flagged": flagged}
+    return {
+        "summary": report["summary"],
+        "flagged": flagged,
+        "unrecorded_uploads": report.get("unrecorded_uploads") or [],
+    }

@@ -510,13 +510,29 @@ async def test_check_corpus_quality_returns_only_flagged_documents(api: FakeApi)
         "recommended_action": "Delete this document, then upload the original file again",
     }
     summary = {"damaged": 1, "check": 0, "healthy": 1}
+    unrecorded = {
+        "document_id": "d3",
+        "source": "notes.pdf",
+        "passages": 4,
+        "parts_expected": 9,
+        "complete": False,
+    }
     routes["GET", f"{AGENTS}/a1/corpus-quality"] = ok(
-        {"agent_id": "a1", "summary": summary, "documents": [healthy, damaged]}
+        {
+            "agent_id": "a1",
+            "summary": summary,
+            "documents": [healthy, damaged],
+            "unrecorded_uploads": [unrecorded],
+        }
     )
 
     result = await call_tool("check_corpus_quality", agent_id="a1")
 
-    assert result.structured_content == {"summary": summary, "flagged": [damaged]}
+    assert result.structured_content == {
+        "summary": summary,
+        "flagged": [damaged],
+        "unrecorded_uploads": [unrecorded],
+    }
 
 
 async def test_tools_refuse_a_missing_route_cleanly(api: FakeApi):
