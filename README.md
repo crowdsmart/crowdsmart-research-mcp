@@ -92,8 +92,10 @@ A KMA is a Knowledge Agent with one or more perspective models. Each model is a 
 | `get_kma_scoreboard` | Scores the frozen forecasts of a domain: hits, Brier score and log loss, by KMA | Reads |
 | `list_kmas` | Lists your KMAs, with their domains | Reads |
 | `create_kma` | Creates a KMA and attaches it to a domain | Adds |
+| `enable_kma` | Makes a Knowledge Agent that you own a KMA, for example to finish a `create_kma` that stopped | Replaces |
 | `attach_kma_to_domain` | Attaches your KMA to a domain. You cannot undo this here | Adds |
 | `list_kma_documents` | Lists the documents of a KMA, with their extraction review and their tag | Reads |
+| `read_kma_extraction` | Reads the extracted text of a document as the KMA reads it, with its digest | Reads |
 | `review_kma_document` | Approves the extracted text of a document, or asks for a correction | Replaces |
 | `tag_kma_document` | Tags a document as a domain source or as evidence for one case | Replaces |
 | `check_kma_build_preflight` | Checks the reader, the worker, the domain and the sources before a build | Reads |
@@ -114,12 +116,12 @@ A KMA is a Knowledge Agent with one or more perspective models. Each model is a 
 To build a KMA and forecast a case:
 
 1. Find or create a domain with `list_kma_domains` or `create_kma_domain`. Add its cases with `add_kma_case`.
-2. Create the KMA on the domain with `create_kma`.
+2. Create the KMA on the domain with `create_kma`. If it stops partway, it gives the agent's ID: finish with `enable_kma` or `attach_kma_to_domain` instead of creating another agent.
 3. Add its domain sources with `add_text_document` or `upload_document`. Add the evidence for each case in the same way.
-4. Read each document with `read_document` and compare it with the original. Then approve it with `review_kma_document`.
+4. Read each extraction with `read_kma_extraction` and compare it with the original. This is the text that the KMA reads: headers are removed, the text is cleaned and near-duplicate passages are left out, so it can differ from `read_document`. Then approve it with `review_kma_document`, giving the digest that `read_kma_extraction` returned.
 5. Tag each document with `tag_kma_document`: `domain` for a domain source, or `case` with its case ID. Give its publication date.
 6. Check the KMA with `check_kma_build_preflight`. Then start the build with `start_kma_build`, with a perspective name and a brief.
-7. Follow the build with `get_kma_builds`. When it waits for you, decide with `decide_kma_build`: choose the variables, check the structure, then publish.
+7. Follow the build with `get_kma_builds`. When it waits for you, decide with `decide_kma_build`: choose the variables, check the structure, then publish. If it waits for `take_published`, another perspective was published with a different definition of one of its variables: revise or stop the build.
 8. Read the forecast for a case with `get_kma_forecast`. When no readings wait, freeze it with `freeze_kma_forecast`.
 9. When the case resolves, record the outcome with `resolve_kma_case`. Then compare the scores with `get_kma_scoreboard`.
 

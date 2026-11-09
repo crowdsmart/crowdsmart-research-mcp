@@ -24,8 +24,9 @@ document is permanent. Launch a Jam only when the user asks for it.
 Knowledge Model Agents (KMAs) forecast the cases of one domain (a kind of decision, with \
 an outcome) through perspective models that the owner approves. list_kma_domains and \
 get_kma_domain show domains and their cases; list_kmas shows your KMAs. To build one: \
-create_kma on a domain, add its domain sources as documents, approve each extraction \
-(review_kma_document) and tag it (tag_kma_document), then check_kma_build_preflight and \
+create_kma on a domain, add its domain sources as documents, read each extraction as the \
+KMA reads it (read_kma_extraction) and approve it (review_kma_document), tag it \
+(tag_kma_document), then check_kma_build_preflight and \
 start_kma_build. A build's model calls run on CrowdSmart's worker: follow it with \
 get_kma_builds and make each decision it waits for with decide_kma_build, only as the \
 user decides. get_kma_forecast gives a KMA's forecast for a case and why; only a forecast \

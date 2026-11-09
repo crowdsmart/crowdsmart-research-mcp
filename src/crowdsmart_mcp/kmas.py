@@ -10,9 +10,10 @@ results arrive later. These tools follow the KMA page of the current app.
 """
 
 import asyncio
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import Field
 
 from crowdsmart_mcp import api
 from crowdsmart_mcp.api import ADDS, CHANGES, QUEUES, READS, Id
@@ -367,16 +368,26 @@ async def create_kma(
     created = await api.call("POST", "/api/knowledge-agents/", json=body)
     agent_id = created["agent_id"]
     try:
-        _ = await api.call(
-            "POST", f"{_kma(agent_id)}/enable", json={"community_id": community}
-        )
-        if domain_id is not None:
-            _ = await attach_kma_to_domain(agent_id, domain_id)
+        _ = await _enable(agent_id, community)
     except ToolError as error:
+        then = (
+            f", then attach_kma_to_domain with domain_id {domain_id}"
+            if domain_id is not None
+            else ""
+        )
         raise ToolError(
-            f"Created Knowledge Agent {agent_id}, but could not finish making it a KMA "
-            + f"({error}). Do not create it again: retry the step that failed for {agent_id}."
+            f"Created Knowledge Agent {agent_id}, but could not make it a KMA ({error}). "
+            + f"Do not create it again: call enable_kma for {agent_id}{then}."
         ) from error
+    if domain_id is not None:
+        try:
+            _ = await attach_kma_to_domain(agent_id, domain_id)
+        except ToolError as error:
+            raise ToolError(
+                f"Created KMA {agent_id}, but could not attach it to domain {domain_id} "
+                + f"({error}). Do not create it again: call attach_kma_to_domain for "
+                + f"{agent_id} once the problem is fixed."
+            ) from error
     return {
         "agent_id": agent_id,
         "name": created["name"],
@@ -385,12 +396,42 @@ async def create_kma(
     }
 
 
+async def _enable(agent_id: str, community_id: str | None) -> dict[str, Any]:
+    return await api.call(
+        "POST", f"{_kma(agent_id)}/enable", json={"community_id": community_id}
+    )
+
+
+@mcp.tool(annotations=CHANGES)
+async def enable_kma(agent_id: Id, community_id: str | None = None) -> dict[str, Any]:
+    """Make a Knowledge Agent you own a KMA. Its documents stay as they are.
+
+    Use it to finish a create_kma that stopped before the agent became a KMA,
+    or to make an existing Knowledge Agent a KMA. Then attach it to a domain
+    with attach_kma_to_domain. Calling it on a KMA changes nothing but its
+    community, when community_id is given.
+
+    Args:
+        agent_id: ID of a Knowledge Agent you own.
+        community_id: The workspace (community) the KMA belongs to, from
+            list_my_communities. Default: the agent's own community.
+    """
+    view = await _enable(agent_id, community_id)
+    return {
+        "agent_id": view["id"],
+        "name": view["name"],
+        "documents": len(view["documents"]),
+    }
+
+
 @mcp.tool(annotations=ADDS)
 async def attach_kma_to_domain(agent_id: Id, domain_id: str) -> dict[str, Any]:
     """Attach a KMA you own to a domain. This cannot be undone here.
 
     A KMA works on one domain, and the domain's jobs act on every KMA attached to
-    it. Check the domain's name first.
+    it. Check the domain's name first. Attach only a KMA: a Knowledge Agent that
+    is not one (see enable_kma) can stop the domain's case evidence from being
+    read.
 
     Args:
         agent_id: ID of a KMA you own, from list_kmas or create_kma.
@@ -434,7 +475,8 @@ async def list_kma_documents(agent_id: Id) -> dict[str, Any]:
     build its models) or as evidence for one case (role "case"). "published"
     decides admission: case evidence counts only if published by the case's
     as-of date. "extraction_digest" identifies the extraction that
-    review_kma_document approves. Read a document's text with read_document.
+    review_kma_document approves. Read the text that the KMA reads with
+    read_kma_extraction.
 
     Args:
         agent_id: KMA ID, from list_kmas.
@@ -452,6 +494,71 @@ async def list_kma_documents(agent_id: Id) -> dict[str, Any]:
     }
 
 
+@mcp.tool(annotations=READS)
+async def read_kma_extraction(
+    agent_id: Id,
+    document_id: Id,
+    start: Annotated[int, Field(ge=1)] = 1,
+    max_chars: Annotated[int, Field(ge=1)] = 20_000,
+) -> dict[str, Any]:
+    """Read a KMA document's extracted text as the KMA reads it, to review the extraction.
+
+    This is the text that review_kma_document approves: the stored passages
+    without their "title | Part n of m:" headers, cleaned, and with
+    near-duplicate passages left out. It can differ from read_document, which
+    shows the stored passages as they are, so compare this text with the
+    original: check that nothing the original says is missing or changed. Each
+    passage gives its location: the stored passage it comes from.
+
+    Passages are returned whole, from passage "start" until max_chars.
+    "next_start" is the next passage to read, or null after the last one. A
+    passage longer than max_chars is cut, and "truncated" is true: read it
+    again with a larger max_chars. Approve with the extraction_digest returned
+    here, so that the review applies to the text that was read.
+
+    Args:
+        agent_id: KMA ID, from list_kmas.
+        document_id: Document ID, from list_kma_documents.
+        start: The first passage to return, counting from 1.
+        max_chars: Maximum number of characters of text to return (default 20,000).
+    """
+    view = await api.call("GET", _kma(agent_id))
+    document = next((d for d in view["documents"] if d["id"] == document_id), None)
+    if document is None:
+        raise ToolError(
+            f"KMA {agent_id} has no document {document_id}. "
+            + "Find its documents with list_kma_documents."
+        )
+    extraction = document["extraction"]
+    blocks: list[dict[str, Any]] = extraction["blocks"]
+    passages: list[dict[str, Any]] = []
+    used = 0
+    truncated = False
+    index = start - 1
+    while index < len(blocks) and not truncated:
+        text: str = blocks[index]["text"]
+        if passages and used + len(text) > max_chars:
+            break
+        if len(text) > max_chars:  # only the first passage can be cut
+            text, truncated = text[:max_chars], True
+        passages.append({"location": blocks[index]["location"], "text": text})
+        used += len(text)
+        index += 1
+    summary = _kma_document(document, None)
+    return {
+        "document_id": document_id,
+        "filename": summary["filename"],
+        "extraction": summary["extraction"],
+        "issues": summary["issues"],
+        "extraction_digest": summary["extraction_digest"],
+        "review": summary["review"],
+        "total_passages": len(blocks),
+        "passages": passages,
+        "truncated": truncated,
+        "next_start": index + 1 if index < len(blocks) else None,
+    }
+
+
 @mcp.tool(annotations=CHANGES)
 async def review_kma_document(
     agent_id: Id,
@@ -463,19 +570,20 @@ async def review_kma_document(
 ) -> dict[str, Any]:
     """Record your review of a KMA document's extracted text. It replaces an earlier review.
 
-    Approve a document only when the user has checked the full extracted text
-    (read_document) against the original and says so: "approved" requires
-    full_document_checked. "needs_correction" requires notes that say what is
-    wrong and where. The review applies to the extraction with this digest: if
-    the document changed, review it again. When every document of the KMA is
-    approved, CrowdSmart also starts its older concept and network generation,
-    which makes model calls.
+    Approve a document only when the user has checked the full extracted text,
+    as read_kma_extraction gives it, against the original and says so:
+    "approved" requires full_document_checked. "needs_correction" requires
+    notes that say what is wrong and where. The review applies to the
+    extraction with this digest: if the document changed, review it again.
+    When every document of the KMA is approved, CrowdSmart also starts its
+    older concept and network generation, which makes model calls.
 
     Args:
         agent_id: ID of a KMA you own.
         document_id: Document ID, from list_kma_documents.
         decision: "approved" or "needs_correction".
-        extraction_digest: The document's extraction_digest from list_kma_documents.
+        extraction_digest: The extraction_digest that read_kma_extraction gave
+            with the text that was checked.
         full_document_checked: The user confirms that the full extraction was checked
             against the original.
         notes: What was checked, or what needs correcting (at most 4000 characters).
@@ -608,8 +716,13 @@ async def get_kma_builds(agent_id: Id) -> dict[str, Any]:
       each definition to refer to one case before the decision.
     - "accept_definitions": accept stages.S2.definitions.
     - "accept_structure": check stages.S3 (parents, polarity and link votes).
-    - "publish" or "take_published": publish the perspective (stages.S4 shows
-      the elicited answers and incoherent rows).
+    - "publish": publish the perspective (stages.S4 shows the elicited answers
+      and incoherent rows).
+    - "take_published": another perspective of the KMA was published since
+      this build started, and "clashes" lists the variables that it defines
+      with other states. This build cannot be published: revise it (it starts
+      again at the variables with the published definitions) or stop it, as
+      the user decides.
     - "stop_or_restart": the structure failed its checks; stop the build or
       revise it from the variables.
     "awaiting" is null while "waiting" calls are with CrowdSmart's worker. Asking
@@ -653,30 +766,43 @@ async def decide_kma_build(
 ) -> dict[str, Any]:
     """Make the owner's decision at a stage of a KMA build. Decide only as the user decides.
 
-    Each action applies only when get_kma_builds shows the build "awaiting" it:
+    Each accept action and publish apply only when get_kma_builds shows the
+    build "awaiting" it; stop and revise apply to any open build:
     - "accept_variables": accept is the list of chosen proposal keys (four to
       six); edits rewords their definitions (10 to 400 characters each).
     - "accept_definitions": accept is the list of definition keys to keep; edits
       as above.
-    - "accept_structure": accept true (or false to stop the build). parents,
-      optional, replaces the structure: each variable and the outcome with their
-      parents, at most three each, and every variable must reach the outcome.
-      polarity sets link signs, keyed "parent->child".
+    - "accept_structure": accept is required: true accepts the structure, false
+      rejects it and stops the build. parents, optional, replaces the
+      structure: each variable and the outcome with their parents, at most
+      three each, and every variable must reach the outcome. polarity sets link
+      signs, keyed "parent->child".
     - "publish": the perspective joins the KMA's published model, and readings
       of the domain's open cases are queued.
     - "stop": end the build. This cannot be undone.
     - "revise": stop the build and start a new one at the variables, with its
-      choices carried over (the result is the new build).
+      choices carried over (the result is the new build). Use it when the build
+      awaits "take_published" or "stop_or_restart".
 
     Args:
         agent_id: ID of a KMA you own.
         build_id: Build ID, from get_kma_builds (for example "b1").
         action: The decision.
-        accept: The accepted keys, or true or false for accept_structure.
+        accept: The accepted keys for accept_variables and accept_definitions;
+            true or false for accept_structure.
         edits: New definitions, by variable key.
         parents: The structure that you set, for accept_structure.
         polarity: Link signs, for accept_structure.
     """
+    if action in ("accept_variables", "accept_definitions") and not isinstance(
+        accept, list
+    ):
+        raise ToolError(f"{action} needs accept: the list of keys that the user chose.")
+    if action == "accept_structure" and not isinstance(accept, bool):
+        raise ToolError(
+            "accept_structure needs accept: true to accept the structure, or false "
+            + "to reject it, which stops the build. Ask the user which."
+        )
     path = f"{_kma(agent_id)}/v2/build/{build_id}"
     if action == "revise":
         return _build(await api.call("POST", f"{path}/revise", json={}))

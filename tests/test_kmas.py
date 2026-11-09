@@ -206,10 +206,53 @@ async def test_create_kma_keeps_the_agent_id_when_a_later_step_fails(api: FakeAp
     )
 
     message = error_text(result)
-    assert "Created Knowledge Agent a1" in message
+    assert "Created KMA a1" in message
     assert "unknown domain nope" in message
     assert "Do not create it again" in message
+    assert "attach_kma_to_domain" in message
     assert len([r for r in requests if r.url.path == "/api/knowledge-agents/"]) == 1
+
+
+async def test_create_kma_names_enable_kma_when_enabling_fails(api: FakeApi):
+    routes, requests = api
+    routes["POST", "/api/knowledge-agents/"] = ok(
+        {"success": True, "agent_id": "a1", "name": "Rates KMA", "message": ""}
+    )
+    routes["POST", f"{KMA}/enable"] = httpx2.Response(503, json={"detail": "busy"})
+
+    result = await call_tool(
+        "create_kma",
+        name="Rates KMA",
+        perspective="p",
+        domain_id="rates",
+        community_id="c1",
+    )
+
+    message = error_text(result)
+    assert "Created Knowledge Agent a1" in message
+    assert "busy" in message
+    assert "call enable_kma for a1, then attach_kma_to_domain" in message
+    assert not [r for r in requests if r.url.path == f"{KMA}/v2/domain"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "body"),
+    [({}, {"community_id": None}), ({"community_id": "c2"}, {"community_id": "c2"})],
+)
+async def test_enable_kma_makes_an_existing_agent_a_kma(
+    api: FakeApi, arguments: dict[str, str], body: dict[str, object]
+):
+    routes, requests = api
+    routes["POST", f"{KMA}/enable"] = ok(kma_view([kma_document()]))
+
+    result = await call_tool("enable_kma", agent_id="a1", **arguments)
+
+    assert result.structured_content == {
+        "agent_id": "a1",
+        "name": "Rates KMA",
+        "documents": 1,
+    }
+    assert sent(requests, "POST", f"{KMA}/enable") == body
 
 
 async def test_list_kmas_reads_every_community_and_finds_each_domain(api: FakeApi):
@@ -282,6 +325,87 @@ async def test_list_kma_documents_gives_review_tag_and_digest(api: FakeApi):
             }
         ],
     }
+
+
+def extraction_document(texts: list[str]) -> dict[str, object]:
+    """A document whose extraction blocks have these texts, from stored passages 1, 3, 5..."""
+    document = kma_document()
+    document["extraction"] = {
+        "status": "review_required",
+        "issues": [],
+        "blocks": [
+            {"location": {"kind": "passage", "index": 2 * i + 1}, "text": text}
+            for i, text in enumerate(texts)
+        ],
+    }
+    return document
+
+
+async def test_read_kma_extraction_gives_the_blocks_and_the_digest(api: FakeApi):
+    routes, requests = api
+    routes["GET", KMA] = ok(kma_view([extraction_document(["aaaa", "bbbb", "cc"])]))
+
+    result = await call_tool(
+        "read_kma_extraction", agent_id="a1", document_id="d1", max_chars=9
+    )
+
+    assert result.structured_content == {
+        "document_id": "d1",
+        "filename": "Policy explainer",
+        "extraction": "review_required",
+        "issues": [],
+        "extraction_digest": "abc123",
+        "review": {"state": "unreviewed"},
+        "total_passages": 3,
+        "passages": [
+            {"location": {"kind": "passage", "index": 1}, "text": "aaaa"},
+            {"location": {"kind": "passage", "index": 3}, "text": "bbbb"},
+        ],
+        "truncated": False,
+        "next_start": 3,
+    }
+    # The text and the digest come from one read.
+    assert [r.url.path for r in requests] == [KMA]
+
+
+async def test_read_kma_extraction_continues_from_start(api: FakeApi):
+    routes, _ = api
+    routes["GET", KMA] = ok(kma_view([extraction_document(["aaaa", "bbbb", "cc"])]))
+
+    result = await call_tool(
+        "read_kma_extraction", agent_id="a1", document_id="d1", start=3
+    )
+
+    assert result.structured_content is not None
+    assert result.structured_content["passages"] == [
+        {"location": {"kind": "passage", "index": 5}, "text": "cc"}
+    ]
+    assert result.structured_content["next_start"] is None
+
+
+async def test_read_kma_extraction_cuts_a_passage_longer_than_max_chars(api: FakeApi):
+    routes, _ = api
+    routes["GET", KMA] = ok(kma_view([extraction_document(["a" * 10, "b"])]))
+
+    result = await call_tool(
+        "read_kma_extraction", agent_id="a1", document_id="d1", max_chars=4
+    )
+
+    assert result.structured_content is not None
+    assert result.structured_content["passages"] == [
+        {"location": {"kind": "passage", "index": 1}, "text": "aaaa"}
+    ]
+    assert result.structured_content["truncated"] is True
+    assert result.structured_content["next_start"] == 2
+
+
+async def test_read_kma_extraction_of_an_unknown_document(api: FakeApi):
+    routes, _ = api
+    routes["GET", KMA] = ok(kma_view([kma_document()]))
+
+    result = await call_tool("read_kma_extraction", agent_id="a1", document_id="d9")
+
+    assert "has no document d9" in error_text(result)
 
 
 async def test_review_kma_document_sends_the_digest_and_the_attestation(api: FakeApi):
@@ -436,6 +560,29 @@ async def test_decide_kma_build_posts_each_action(
 
     assert not result.is_error
     assert sent(requests, "POST", f"{KMA}/v2/build{path}") == body
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "accept_structure"},
+        {"action": "accept_structure", "accept": ["a"]},
+        {"action": "accept_variables"},
+        {"action": "accept_variables", "accept": True},
+        {"action": "accept_definitions", "accept": False},
+    ],
+)
+async def test_decide_kma_build_needs_the_right_accept(
+    api: FakeApi, arguments: dict[str, object]
+):
+    _, requests = api
+
+    result = await call_tool(
+        "decide_kma_build", agent_id="a1", build_id="b1", **arguments
+    )
+
+    assert f"{arguments['action']} needs accept" in error_text(result)
+    assert not requests
 
 
 async def test_get_kma_builds_leaves_out_refits_and_revisions(api: FakeApi):
