@@ -20,12 +20,18 @@ MISSING_KEY = (
 # Safety hints, from what each tool does to CrowdSmart (not from its HTTP method).
 READS = ToolAnnotations(read_only_hint=True)
 ADDS = ToolAnnotations(read_only_hint=False, destructive_hint=False)
-# Replaces or deletes something: settings or a document.
+# Replaces or deletes something: settings, a document, a review or a build.
 CHANGES = ToolAnnotations(read_only_hint=False, destructive_hint=True)
+# Changes nothing that you see, but can record derived state and queue model calls
+# on CrowdSmart's worker. Asking again queues nothing new.
+QUEUES = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=True
+)
 
-# An ID that goes into a URL path. CrowdSmart IDs are UUIDs: letters, digits and
-# hyphens only, so an ID cannot change the path, the query or the operation.
-Id = Annotated[str, Field(pattern=r"^[A-Za-z0-9-]+$")]
+# An ID that goes into a URL path: a UUID, or a KMA domain, case or build ID.
+# Letters, digits, hyphens and underscores only, so an ID cannot change the path,
+# the query or the operation.
+Id = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]+$")]
 
 
 async def call(method: str, path: str, **kwargs: Any) -> Any:

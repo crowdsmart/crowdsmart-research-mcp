@@ -2,7 +2,13 @@
 
 An MCP server for CrowdSmart. It connects an MCP client (for example Claude Desktop, Claude Code, Cursor or Hermes) to the CrowdSmart research platform (csgcip). It authenticates with your own CrowdSmart API key.
 
-The server has 21 tools. They cover two workflows: Knowledge Agents that answer questions from their documents, and Jams in which Knowledge Agents discuss a topic. The server does not cover the rest of the platform. See [Scope](#scope).
+The server has 48 tools. They cover three workflows:
+
+- Knowledge Agents that answer questions from their documents.
+- Jams in which Knowledge Agents discuss a topic.
+- Knowledge Model Agents (KMAs) that forecast the cases of a domain.
+
+The server does not cover the rest of the platform. See [Scope](#scope).
 
 ## Tools
 
@@ -12,7 +18,8 @@ Each tool tells the client what it does to your CrowdSmart data (MCP tool annota
 |---|---|
 | Reads | Changes nothing |
 | Adds | Adds a record, for example a document or a Jam |
-| Replaces | Replaces or deletes settings or a document |
+| Replaces | Replaces or deletes settings, a document, a review or a build |
+| Queues | Changes nothing that you see, but can queue model calls on CrowdSmart's worker. A repeated call queues nothing new |
 
 ### Knowledge Agents
 
@@ -68,6 +75,60 @@ Knowledge Agents answer only the first prompt of a Jam. For more questions, use 
 
 The tools act as the owner of your API key. Only the creator of a Jam can launch it or add agents to it. The creator is always invited to the Jam and, if invitations are sent, gets the invitation email too.
 
+### Knowledge Model Agents
+
+A Knowledge Model Agent (KMA) forecasts the cases of one domain. A domain is a kind of decision: an outcome with its states, and the fields that describe a case. A case is one question in the domain, with an as-of date and a resolution criterion.
+
+A KMA is a Knowledge Agent with one or more perspective models. Each model is a Bayesian belief network that a staged build makes from the KMA's domain sources. You approve each stage. To forecast a case, each model reads the case's evidence through CrowdSmart's pinned reader. The reader runs on CrowdSmart's worker, so the results of a build or a reading come later.
+
+| Tool | What it does | Effect |
+|---|---|---|
+| `list_kma_domains` | Lists every domain, with its outcome, cases and KMAs | Reads |
+| `get_kma_domain` | Shows a domain: its outcome, case fields, base-rate table, cases and KMAs | Reads |
+| `create_kma_domain` | Creates a domain that you own | Adds |
+| `add_kma_case` | Adds a case to a domain. You cannot change or remove a case | Adds |
+| `resolve_kma_case` | Records the outcome of a case. You cannot undo this | Adds |
+| `mark_kma_case_unscored` | Marks a case as not scored, for example when the decision came before the freeze. You cannot undo this | Adds |
+| `get_kma_scoreboard` | Scores the frozen forecasts of a domain: hits, Brier score and log loss, by KMA | Reads |
+| `list_kmas` | Lists your KMAs, with their domains | Reads |
+| `create_kma` | Creates a KMA and attaches it to a domain | Adds |
+| `attach_kma_to_domain` | Attaches your KMA to a domain. You cannot undo this here | Adds |
+| `list_kma_documents` | Lists the documents of a KMA, with their extraction review and their tag | Reads |
+| `review_kma_document` | Approves the extracted text of a document, or asks for a correction | Replaces |
+| `tag_kma_document` | Tags a document as a domain source or as evidence for one case | Replaces |
+| `check_kma_build_preflight` | Checks the reader, the worker, the domain and the sources before a build | Reads |
+| `start_kma_build` | Starts the build of one perspective model | Adds |
+| `get_kma_builds` | Shows each build: its stage, and the decision it waits for | Queues |
+| `decide_kma_build` | Makes your decision at a stage of a build: variables, definitions, structure, publish, stop or revise | Replaces |
+| `get_kma_forecast` | Shows the current forecast of a KMA for a case, and the readings behind it | Queues |
+| `get_kma_model` | Shows the published models of a KMA: variables, links and priors | Reads |
+| `freeze_kma_forecast` | Freezes the forecast of a KMA for a case. Only frozen forecasts are scored. You cannot undo this | Adds |
+| `get_kma_switches` | Shows the adaptive switches of a KMA, and their history | Reads |
+| `set_kma_switch` | Sets an adaptive switch of a KMA, with the reason | Replaces |
+| `list_kma_needs` | Lists what a KMA asks people to answer, and the questions so far | Queues |
+| `ask_kma_need` | Asks a need of members of the domain's cohort | Adds |
+| `get_kma_cohort` | Shows the cohort of a domain: the people invited to answer questions | Reads |
+| `invite_to_kma_cohort` | Invites a person to the cohort of a domain. CrowdSmart sends an email | Adds |
+| `remove_from_kma_cohort` | Removes a person from the cohort of a domain | Replaces |
+
+To build a KMA and forecast a case:
+
+1. Find or create a domain with `list_kma_domains` or `create_kma_domain`. Add its cases with `add_kma_case`.
+2. Create the KMA on the domain with `create_kma`.
+3. Add its domain sources with `add_text_document` or `upload_document`. Add the evidence for each case in the same way.
+4. Read each document with `read_document` and compare it with the original. Then approve it with `review_kma_document`.
+5. Tag each document with `tag_kma_document`: `domain` for a domain source, or `case` with its case ID. Give its publication date.
+6. Check the KMA with `check_kma_build_preflight`. Then start the build with `start_kma_build`, with a perspective name and a brief.
+7. Follow the build with `get_kma_builds`. When it waits for you, decide with `decide_kma_build`: choose the variables, check the structure, then publish.
+8. Read the forecast for a case with `get_kma_forecast`. When no readings wait, freeze it with `freeze_kma_forecast`.
+9. When the case resolves, record the outcome with `resolve_kma_case`. Then compare the scores with `get_kma_scoreboard`.
+
+A KMA reads only approved documents. When you approve the last unreviewed document of a KMA, CrowdSmart also starts its older concept and network generation, which makes model calls.
+
+The build decisions belong to the KMA's owner. An agent that uses these tools makes a decision only when the user makes it.
+
+A panel is three or four KMAs on one domain, one for each perspective. The panel forecast is the mean of the frozen forecasts of its members. Compare a panel with the base rate and with its best member. The mean of members that disagree always scores better than the members do on average, so this gain alone does not show skill.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/). `uvx` gets Python 3.13 and the dependencies when necessary.
@@ -111,12 +172,14 @@ If `CROWDSMART_API_KEY` is not set, the server stops at startup and writes the r
 
 ## Scope
 
-The server covers Knowledge Agents and Jams of Knowledge Agents. It does not cover other parts of the CrowdSmart platform. These include:
+The server covers Knowledge Agents, Jams of Knowledge Agents, and the build, forecast and scoring of Knowledge Model Agents. It does not cover other parts of the CrowdSmart platform. These include:
 
 - Other agent types and research features
 - Taking part in a Jam as a person
 - Jam messages, analytics and exports
 - Housekeeping, for example archiving a Jam or sending its invitations again
+- KMA Jams, refits and revisions, Track and runs, and answers to a KMA's questions
+- Schedules: a domain's jobs that collect evidence, freeze and resolve cases at set times. Your MCP client can do these steps with the tools above
 
 Use the CrowdSmart app for these features.
 
@@ -130,7 +193,7 @@ uv run ruff format --check src tests
 uv run basedpyright
 ```
 
-The tests use a fake API and an in-process MCP client. Each tool module (`knowledge_agents.py`, `jams.py`) has a test file. To list the tools of the real server with the MCP Inspector, run this command once with `--protocol-era modern` and once with `--protocol-era legacy`:
+The tests use a fake API and an in-process MCP client. Each tool module (`knowledge_agents.py`, `jams.py`, `kmas.py`) has a test file. To list the tools of the real server with the MCP Inspector, run this command once with `--protocol-era modern` and once with `--protocol-era legacy`:
 
 ```sh
 npx @modelcontextprotocol/inspector --cli -e CROWDSMART_API_KEY=crc_any \

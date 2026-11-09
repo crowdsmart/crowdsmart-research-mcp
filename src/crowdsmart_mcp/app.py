@@ -3,7 +3,7 @@
 from mcp.server import MCPServer
 
 INSTRUCTIONS = """\
-CrowdSmart Knowledge Agents and Jams. These tools act as the owner of the API key.
+CrowdSmart Knowledge Agents, Jams and Knowledge Model Agents. These tools act as the owner of the API key.
 
 Knowledge Agents (KAs) answer questions from their own documents. Find them with \
 list_knowledge_agents and ask with ask_knowledge_agent. In an answer, a sentence that ends \
@@ -19,6 +19,17 @@ with its author_id and citations. Agents answer only the first prompt of a Jam. 
 take part in the CrowdSmart app.
 
 Some actions cannot be undone: launching a Jam sends invitation emails, and deleting a \
-document is permanent. Launch a Jam only when the user asks for it."""
+document is permanent. Launch a Jam only when the user asks for it.
+
+Knowledge Model Agents (KMAs) forecast the cases of one domain (a kind of decision, with \
+an outcome) through perspective models that the owner approves. list_kma_domains and \
+get_kma_domain show domains and their cases; list_kmas shows your KMAs. To build one: \
+create_kma on a domain, add its domain sources as documents, approve each extraction \
+(review_kma_document) and tag it (tag_kma_document), then check_kma_build_preflight and \
+start_kma_build. A build's model calls run on CrowdSmart's worker: follow it with \
+get_kma_builds and make each decision it waits for with decide_kma_build, only as the \
+user decides. get_kma_forecast gives a KMA's forecast for a case and why; only a forecast \
+frozen before the case resolves (freeze_kma_forecast) is scored (get_kma_scoreboard). \
+Freezing, resolving a case and attaching a KMA to a domain cannot be undone."""
 
 mcp = MCPServer("crowdsmart", instructions=INSTRUCTIONS)

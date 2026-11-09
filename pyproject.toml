@@ -1,7 +1,7 @@
 [project]
 name = "crowdsmart-mcp"
 version = "0.1.0"
-description = "MCP server for CrowdSmart Knowledge Agents and Jams: a small, current subset of the csgcip API"
+description = "MCP server for CrowdSmart Knowledge Agents, Jams and Knowledge Model Agents: a small, current subset of the csgcip API"
 readme = "README.md"
 authors = [
     { name = "Jack Kehler", email = "jtkehler@gmail.com" }
