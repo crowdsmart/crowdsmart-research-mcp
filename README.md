@@ -155,7 +155,7 @@ Add this entry to the MCP configuration of your client. For Claude Desktop, the 
   "mcpServers": {
     "crowdsmart": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/jtkehler/crowdsmart-mcp", "crowdsmart-mcp"],
+      "args": ["--from", "git+https://github.com/crowdsmart/crowdsmart-research-mcp", "crowdsmart-mcp"],
       "env": { "CROWDSMART_API_KEY": "crc_your_key" }
     }
   }
