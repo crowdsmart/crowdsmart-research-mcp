@@ -94,6 +94,7 @@ def _agent_summary(agent: dict[str, Any]) -> dict[str, Any]:
         "document_count": agent["document_count"],
         "chunk_count": agent["chunk_count"],
         "mode": "generative" if generative else "referenced",
+        "model": agent.get("model_choice"),
         "visibility": agent.get("visibility"),
         "allow_foundation_backfill": agent["allow_foundation_backfill"],
     }
@@ -106,7 +107,9 @@ async def list_knowledge_agents() -> dict[str, Any]:
     A Knowledge Agent answers from its own corpus of documents. Other people's
     agents are those published to one of your communities, to the whole platform
     or to the public (and, for an administrator, every agent).
-    "mode" is the agent's default way of answering (see ask_knowledge_agent).
+    "mode" is the agent's default way of answering (see ask_knowledge_agent), and
+    "model" the language model for its generative answers. "chunk_count" is the
+    number of stored passages.
     "allow_foundation_backfill" means the agent can also answer from the model's
     general knowledge. Such answers are labeled.
     """
@@ -230,12 +233,14 @@ async def ask_knowledge_agent(
     question: str,
     mode: Mode | None = None,
     max_chunks: int = 5,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Ask a Knowledge Agent a question and get an answer from its documents, with citations.
 
     Generative mode writes an answer. A sentence ending in a citation such as [1]
     is evidence: it was checked against passage 1, or is shown in the passage's
-    exact words. A sentence without a citation is the agent's own reasoning.
+    exact words. A sentence without a citation is the agent's own reasoning, and
+    is not checked against the passages.
     Referenced mode returns the cited passages word for word, with no model writing.
     When the documents do not cover the question, the agent says so.
 
@@ -243,26 +248,53 @@ async def ask_knowledge_agent(
     passages match the question. It does not show whether the answer is right.
     "generation_source" says how the answer was produced (for example
     "corpus_extractive" or "abstained"). "knowledge_source" is "documents" unless
-    general-knowledge backfill contributed. CrowdSmart records each question in
+    general-knowledge backfill contributed. Each question is asked on its own,
+    without earlier questions as context. CrowdSmart records each question in
     the agent's query history.
+
+    verbose adds the details needed to check or repeat an answer:
+    - "evidence": each written sentence, as "evidence" (with its passage number,
+      quote, chunk_id and check "status": "verified", "quote_used" when the exact
+      quote replaced the sentence, or "quote_not_found" when it was removed) or
+      as "reasoning"; with "counts" per kind and the number "removed". Present
+      only for answers written as typed sentences.
+    - "passages": the number of passages "requested" (max_chunks) and
+      "returned" with the answer. When the agent declines before writing, the
+      returned passages are the closest ones; they were not used to write.
+    - each citation's chunk_id, "similarity" and "relevance_probability".
+    - "decision_trace" (why the agent answered, declined or fell back),
+      "effective_config" (the settings applied, when CrowdSmart reports them)
+      and "interaction_id" (the recorded question). Each is null if absent.
 
     Args:
         agent_id: Knowledge Agent ID, from list_knowledge_agents.
         question: The question to answer from the agent's documents.
         mode: "generative" or "referenced". Omit to use the agent's own setting.
         max_chunks: Number of passages to retrieve (default 5).
+        verbose: Add the evidence record, passage counts and settings (default
+            false). The response is longer.
     """
     body: dict[str, Any] = {"question": question, "max_chunks": max_chunks}
     if mode is not None:
         body["query_generation_mode"] = MODES[mode]
     result = await api.call("POST", f"{AGENTS}/{agent_id}/query", json=body)
-    return {
+    answer = {
         "answer": result["answer"],
-        "citations": api.citations(result["citations"]),
+        "citations": api.citations(result["citations"], verbose=verbose),
         "confidence": result.get("confidence"),
         "generation_source": result["generation_source"],
         "knowledge_source": result.get("knowledge_source") or "documents",
     }
+    if verbose:
+        answer["evidence"] = result.get("evidence")
+        answer["passages"] = {
+            "requested": max_chunks,
+            "returned": len(result["citations"] or []),
+        }
+        answer["decision_trace"] = result.get("decision_trace")
+        answer["effective_config"] = result.get("effective_config")
+        answer["interaction_id"] = result.get("interaction_id")
+    return answer
 
 
 @mcp.tool(annotations=READS)

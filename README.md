@@ -33,7 +33,7 @@ A Knowledge Agent answers questions from its own documents.
 | `create_knowledge_agent` | Creates a private agent with no documents | Adds |
 | `update_knowledge_agent` | Changes the name, headline, instructions or mode of your agent | Replaces |
 | `set_knowledge_agent_visibility` | Sets who can ask your agent | Replaces |
-| `ask_knowledge_agent` | Asks an agent a question. The answer cites the agent's documents and has a confidence score | Adds the question to the agent's query history |
+| `ask_knowledge_agent` | Asks an agent a question. The answer cites the agent's documents and has a confidence score. With `verbose`, it also shows the evidence checks, passage counts and settings | Adds the question to the agent's query history |
 | `list_documents` | Lists the documents of an agent | Reads |
 | `read_document` | Returns the text of a document, for example to check a citation | Reads |
 | `upload_document` | Uploads a file from this computer to your agent, then waits for its text | Adds |
@@ -42,7 +42,9 @@ A Knowledge Agent answers questions from its own documents.
 | `delete_document` | Deletes a document from your agent. You cannot undo this | Replaces |
 | `check_corpus_quality` | Finds damaged documents: broken lines, garbled OCR, split words and near-duplicates | Reads |
 
-In a generative answer, a sentence that ends with a citation such as `[1]` is evidence. CrowdSmart checked it against passage 1, or shows the exact words of the passage. A sentence without a citation is the agent's own reasoning. The API calls passages "chunks".
+In a generative answer, a sentence that ends with a citation such as `[1]` is evidence. CrowdSmart checked it against passage 1, or shows the exact words of the passage. A sentence without a citation is the agent's own reasoning. CrowdSmart does not check it against the passages. The API calls passages "chunks".
+
+Set `verbose` to check or repeat an answer. The response then also has the check result of each sentence (`evidence`), the number of passages requested and returned (`passages`), the `chunk_id` and scores of each citation, and the settings CrowdSmart reports (`decision_trace`, `effective_config`, `interaction_id`).
 
 `confidence` is a retrieval score from 0 to 1: how well the best passages match the question. A high value shows that the documents match the question. It does not show that the answer is correct.
 

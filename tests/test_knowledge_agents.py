@@ -31,6 +31,7 @@ def agent(agent_id: str, **fields: object) -> dict[str, object]:
         "generation_mode": "foundation_assisted",
         "allow_foundation_backfill": False,
         "strict_rag": True,
+        "model_choice": "open_weight",
         **fields,
     }
 
@@ -138,6 +139,7 @@ async def test_list_knowledge_agents_separates_own_and_shared(api: FakeApi):
                 "document_count": 2,
                 "chunk_count": 10,
                 "mode": "generative",
+                "model": "open_weight",
                 "visibility": "private",
                 "allow_foundation_backfill": False,
             }
@@ -150,6 +152,7 @@ async def test_list_knowledge_agents_separates_own_and_shared(api: FakeApi):
                 "document_count": 2,
                 "chunk_count": 10,
                 "mode": "referenced",
+                "model": "open_weight",
                 "visibility": "platform",
                 "allow_foundation_backfill": False,
             }
@@ -282,6 +285,109 @@ async def test_ask_knowledge_agent_returns_answer_citations_and_confidence(
         "generation_source": "open_weight_api",
         "knowledge_source": "documents",
     }
+
+
+async def test_ask_knowledge_agent_verbose_keeps_evidence_passages_and_settings(
+    api: FakeApi,
+):
+    routes, _ = api
+    evidence = {
+        "mode": "evidence_v4",
+        "parsed": True,
+        "sentences": [
+            {
+                "type": "evidence",
+                "text": "A frame groups slots.",
+                "passage": 1,
+                "quote": "A frame groups slots",
+                "quote_span": [17, 37],
+                "status": "verified",
+                "chunk_id": "c1",
+                "context": {"before": "", "quote": "A frame groups slots"},
+            },
+            {"type": "reasoning", "text": "Frames suit narrow domains."},
+        ],
+        "counts": {"verified": 1, "reasoning": 1},
+        "removed": 0,
+    }
+    trace = {"reason": "grounded_synthesis_succeeded", "degraded": False}
+    config = {"synthesis_model": "local-instruct", "synthesis_temperature": 0.1}
+    routes["POST", f"{AGENTS}/a1/query"] = ok(
+        {
+            "answer": "A frame groups slots [1]. Frames suit narrow domains.",
+            "citations": [
+                {
+                    "index": 1,
+                    "source": "kr.pdf",
+                    "excerpt": "kr | Part 1 of 3: A frame groups slots...",
+                    "similarity": 0.8,
+                    "document_id": "d1",
+                    "chunk_id": "c1",
+                    "relevance_probability": 0.2,
+                }
+            ],
+            "confidence": 0.8,
+            "generation_source": "open_weight_api",
+            "knowledge_source": None,
+            "evidence": evidence,
+            "decision_trace": trace,
+            "effective_config": config,
+            "interaction_id": "i1",
+        }
+    )
+
+    result = await call_tool(
+        "ask_knowledge_agent",
+        agent_id="a1",
+        question="What is a frame?",
+        max_chunks=20,
+        verbose=True,
+    )
+
+    assert result.structured_content is not None
+    content = result.structured_content
+    assert content["citations"] == [
+        {
+            "index": 1,
+            "document": "kr.pdf",
+            "document_id": "d1",
+            "excerpt": "kr | Part 1 of 3: A frame groups slots...",
+            "chunk_id": "c1",
+            "similarity": 0.8,
+            "relevance_probability": 0.2,
+        }
+    ]
+    assert content["evidence"] == evidence
+    assert content["passages"] == {"requested": 20, "returned": 1}
+    assert content["decision_trace"] == trace
+    assert content["effective_config"] == config
+    assert content["interaction_id"] == "i1"
+
+
+async def test_ask_knowledge_agent_verbose_reports_absent_details_as_null(
+    api: FakeApi,
+):
+    routes, _ = api
+    routes["POST", f"{AGENTS}/a1/query"] = ok(
+        {
+            "answer": "The documents do not cover this.",
+            "citations": [],
+            "confidence": 0.1,
+            "generation_source": "abstained",
+        }
+    )
+
+    result = await call_tool(
+        "ask_knowledge_agent", agent_id="a1", question="Weather?", verbose=True
+    )
+
+    assert result.structured_content is not None
+    content = result.structured_content
+    assert content["passages"] == {"requested": 5, "returned": 0}
+    assert content["evidence"] is None
+    assert content["decision_trace"] is None
+    assert content["effective_config"] is None
+    assert content["interaction_id"] is None
 
 
 async def test_ask_knowledge_agent_sends_the_api_name_of_a_mode(api: FakeApi):

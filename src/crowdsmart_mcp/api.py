@@ -75,17 +75,27 @@ def _error_detail(response: httpx2.Response) -> str:
         return response.text[:300]
 
 
-def citations(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """The citations of an answer or a Jam response: [n] in the text is citation n."""
-    return [
-        {
+def citations(
+    raw: list[dict[str, Any]] | None, verbose: bool = False
+) -> list[dict[str, Any]]:
+    """The citations of an answer or a Jam response: [n] in the text is citation n.
+
+    verbose adds the passage's chunk_id and its retrieval scores.
+    """
+    result: list[dict[str, Any]] = []
+    for citation in raw or []:
+        item = {
             "index": citation.get("index"),
             "document": citation.get("source"),
             "document_id": citation.get("document_id"),
             "excerpt": citation.get("excerpt"),
         }
-        for citation in raw or []
-    ]
+        if verbose:
+            item["chunk_id"] = citation.get("chunk_id")
+            item["similarity"] = citation.get("similarity")
+            item["relevance_probability"] = citation.get("relevance_probability")
+        result.append(item)
+    return result
 
 
 async def me() -> dict[str, Any]:

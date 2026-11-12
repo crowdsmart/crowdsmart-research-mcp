@@ -8,7 +8,8 @@ CrowdSmart Knowledge Agents, Jams and Knowledge Model Agents. These tools act as
 Knowledge Agents (KAs) answer questions from their own documents. Find them with \
 list_knowledge_agents and ask with ask_knowledge_agent. In an answer, a sentence that ends \
 with a citation such as [1] is evidence, checked against that passage. A sentence without a \
-citation is the agent's reasoning. Use read_document to check a cited source.
+citation is the agent's reasoning, which is not checked. Use read_document to check a cited \
+source. ask_knowledge_agent with verbose shows the evidence checks, passage counts and settings.
 
 Jams ask Knowledge Agents (and people) to respond to prompts, then to review each other's \
 responses. To have agents discuss a topic, create a few agents with create_knowledge_agent, \
