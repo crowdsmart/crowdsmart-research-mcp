@@ -2,11 +2,12 @@
 
 An MCP server for CrowdSmart. It connects an MCP client (for example Claude Desktop, Claude Code, Cursor or Hermes) to the CrowdSmart research platform (csgcip). It authenticates with your own CrowdSmart API key.
 
-The server has 51 tools. They cover three workflows:
+The server has 54 tools. They cover four workflows:
 
 - Knowledge Agents that answer questions from their documents.
 - Jams in which Knowledge Agents discuss a topic.
 - Knowledge Model Agents (KMAs) that forecast the cases of a domain.
+- Models: run a model version on evidence and fetch the run's receipt.
 
 The server does not cover the rest of the platform. See [Scope](#scope).
 
@@ -134,6 +135,20 @@ The build decisions belong to the KMA's owner. An agent that uses these tools ma
 
 A panel is three or four KMAs on one domain, one for each perspective. The panel forecast is the mean of the frozen forecasts of its members. Compare a panel with the base rate and with its best member. The mean of members that disagree always scores better than the members do on average, so this gain alone does not show skill.
 
+### Models
+
+A model is a Bayesian belief network that CrowdSmart stores as numbered versions. A KMA's perspective models are not model versions: `get_kma_model` shows them.
+
+| Tool | What it does | Effect |
+|---|---|---|
+| `run_model` | Runs a model version on evidence and returns the probabilities of every variable, with a `run_id` | Adds a run receipt |
+| `get_model_version` | Returns a model version exactly as stored: variables, states, links, probability tables, source bindings and checksum | Reads |
+| `get_model_run` | Returns the receipt of a past run. Only the person who made the run can read it | Reads |
+
+`evidence` maps each observed variable to its state, for example `{"rain": "yes"}`. The receipt gives the probabilities in `posteriors`. Only a released version runs: its `status` is `released`. To retry a run safely, for example after a timeout, give the same `request_key`. CrowdSmart then returns the first run instead of adding another. If you do not give a `request_key`, CrowdSmart makes one and returns it. Give a `request_key` on the first call if you may need to retry.
+
+You can read and run these models: a model that you own, a model of a community you belong to, and a model that came from a Jam that you can take part in. These tools do not serve a model that belongs to the adaptive learning of a Knowledge Agent.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/). `uvx` gets Python 3.13 and the dependencies when necessary.
@@ -177,7 +192,7 @@ If `CROWDSMART_API_KEY` is not set, the server stops at startup and writes the r
 
 ## Scope
 
-The server covers Knowledge Agents, Jams of Knowledge Agents, and the build, forecast and scoring of Knowledge Model Agents. It does not cover other parts of the CrowdSmart platform. These include:
+The server covers Knowledge Agents, Jams of Knowledge Agents, the build, forecast and scoring of Knowledge Model Agents, and runs of model versions. It does not cover other parts of the CrowdSmart platform. These include:
 
 - Other agent types and research features
 - Taking part in a Jam as a person
@@ -198,7 +213,7 @@ uv run ruff format --check src tests
 uv run basedpyright
 ```
 
-The tests use a fake API and an in-process MCP client. Each tool module (`knowledge_agents.py`, `jams.py`, `kmas.py`) has a test file. To list the tools of the real server with the MCP Inspector, run this command once with `--protocol-era modern` and once with `--protocol-era legacy`:
+The tests use a fake API and an in-process MCP client. Each tool module (`knowledge_agents.py`, `jams.py`, `kmas.py`, `models.py`) has a test file. To list the tools of the real server with the MCP Inspector, run this command once with `--protocol-era modern` and once with `--protocol-era legacy`:
 
 ```sh
 npx @modelcontextprotocol/inspector --cli -e CROWDSMART_API_KEY=crc_any \

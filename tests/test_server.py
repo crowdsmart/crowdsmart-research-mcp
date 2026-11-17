@@ -66,6 +66,7 @@ KMA_TOOLS = {
     "invite_to_kma_cohort",
     "remove_from_kma_cohort",
 }
+MODEL_TOOLS = {"run_model", "get_model_version", "get_model_run"}
 
 READ_ONLY = {
     "list_my_communities",
@@ -89,6 +90,8 @@ READ_ONLY = {
     "get_kma_model",
     "get_kma_switches",
     "get_kma_cohort",
+    "get_model_version",
+    "get_model_run",
 }
 DESTRUCTIVE = {
     "update_knowledge_agent",
@@ -110,7 +113,7 @@ async def test_server_offers_only_the_curated_tools():
     async with Client(server.mcp) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert set(tools) == KNOWLEDGE_AGENT_TOOLS | JAM_TOOLS | KMA_TOOLS
+    assert set(tools) == KNOWLEDGE_AGENT_TOOLS | JAM_TOOLS | KMA_TOOLS | MODEL_TOOLS
     hints = {
         name: tool.annotations
         for name, tool in tools.items()
@@ -220,6 +223,8 @@ async def test_unexpected_responses_are_reported(
             "freeze_kma_forecast",
             {"domain_id": "d.1", "case_id": "c1", "agent_id": "a1"},
         ),
+        ("get_model_version", {"version_id": "v1/../../models"}),
+        ("get_model_run", {"run_id": "r1?caller=x#"}),
     ],
 )
 async def test_invalid_arguments_send_no_request(

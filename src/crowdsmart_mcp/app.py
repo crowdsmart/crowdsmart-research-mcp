@@ -3,7 +3,8 @@
 from mcp.server import MCPServer
 
 INSTRUCTIONS = """\
-CrowdSmart Knowledge Agents, Jams and Knowledge Model Agents. These tools act as the owner of the API key.
+CrowdSmart Knowledge Agents, Jams, Knowledge Model Agents and models. These tools act as \
+the owner of the API key.
 
 Knowledge Agents (KAs) answer questions from their own documents. Find them with \
 list_knowledge_agents and ask with ask_knowledge_agent. In an answer, a sentence that ends \
@@ -32,6 +33,11 @@ start_kma_build. A build's model calls run on CrowdSmart's worker: follow it wit
 get_kma_builds and make each decision it waits for with decide_kma_build, only as the \
 user decides. get_kma_forecast gives a KMA's forecast for a case and why; only a forecast \
 frozen before the case resolves (freeze_kma_forecast) is scored (get_kma_scoreboard). \
-Freezing, resolving a case and attaching a KMA to a domain cannot be undone."""
+Freezing, resolving a case and attaching a KMA to a domain cannot be undone.
+
+Models: run_model runs a model version on evidence and returns every variable's \
+probabilities with a run_id; get_model_version returns the exact version; get_model_run \
+returns the receipt of a past run of yours. A KMA's perspective models are not model \
+versions: get_kma_model shows them."""
 
 mcp = MCPServer("crowdsmart", instructions=INSTRUCTIONS)
