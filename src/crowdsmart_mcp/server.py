@@ -8,12 +8,19 @@ scope.
 import os
 import sys
 
-from crowdsmart_mcp import jams, kmas, knowledge_agents, models
+from crowdsmart_mcp import (
+    jams,
+    kma_corrections,
+    kma_history,
+    kmas,
+    knowledge_agents,
+    models,
+)
 from crowdsmart_mcp.api import MISSING_KEY
 from crowdsmart_mcp.app import mcp
 
 # Importing these modules registers their tools with the server.
-TOOL_MODULES = (knowledge_agents, jams, kmas, models)
+TOOL_MODULES = (knowledge_agents, jams, kmas, kma_history, kma_corrections, models)
 
 __all__ = ["TOOL_MODULES", "main", "mcp"]
 

@@ -115,6 +115,7 @@ async def test_get_kma_domain_summarizes_the_base_rate_table(api: FakeApi):
             },
             "cases": {"c1": case},
             "kmas": ["a1"],
+            "resolved_at": {},
         }
     )
 
@@ -132,6 +133,71 @@ async def test_get_kma_domain_summarizes_the_base_rate_table(api: FakeApi):
     assert content["subject_field"] is None
     assert content["cases"][0]["practice"] is True
     assert content["cases"][0]["not_scored"] is None
+    assert content["cases"][0]["resolved_at"] is None
+
+
+async def test_get_kma_domain_gives_the_position_a_correction_replaces(api: FakeApi):
+    routes, _ = api
+
+    def case(case_id: str, resolution: dict[str, object] | None) -> dict[str, object]:
+        return {
+            "case_id": case_id,
+            "title": case_id,
+            "question": "q",
+            "as_of": "2026-10-26",
+            "profile": {},
+            "resolution_criterion": "r",
+            "resolution": resolution,
+            "unscored": None,
+        }
+
+    corrected: dict[str, object] = {
+        "state": "hold",
+        "source": "s",
+        "date": "2026-10-28",
+        "by": USER_ID,
+        "seq": 12,
+        "corrects": 7,
+        "reason": "misread",
+    }
+    replaced: list[object] = [
+        {
+            "state": "hike",
+            "source": "s",
+            "date": "2026-10-28",
+            "by": USER_ID,
+            "seq": 7,
+            "replaced_at": 12,
+            "replaced_by": USER_ID,
+            "reason": "misread",
+            "retracted": False,
+        }
+    ]
+    routes["GET", f"{DOMAINS}/rates"] = ok(
+        {
+            "domain": {
+                "id": "rates",
+                "name": "Rates",
+                "owner": USER_ID,
+                "outcome": OUTCOME,
+                "profile_fields": {},
+            },
+            "cases": {
+                "c1": {**case("c1", corrected), "resolution_history": replaced},
+                "c2": case("c2", None),
+            },
+            "kmas": [],
+            "resolved_at": {"c1": 12},
+        }
+    )
+
+    result = await call_tool("get_kma_domain", domain_id="rates")
+
+    resolved, still_open = result.structured_content["cases"]
+    assert (resolved["resolved_at"], resolved["resolution"]) == (12, corrected)
+    assert resolved["resolution_history"] == replaced
+    assert still_open["resolved_at"] is None
+    assert still_open["resolution_history"] == []
 
 
 async def test_create_kma_domain_omits_an_absent_base_rate(api: FakeApi):
@@ -628,16 +694,18 @@ async def test_decide_kma_build_never_fills_in_a_missing_accept(api: FakeApi):
     assert error_text(result).endswith(f"CrowdSmart API error 409: {refusal}")
 
 
-async def test_get_kma_builds_leaves_out_refits_and_revisions(api: FakeApi):
+async def test_get_kma_builds_shows_refits_and_revisions(api: FakeApi):
     routes, _ = api
+    refit = {"refit": "r2", "perspective": "p_main", "stage": "waiting", "waiting": 36}
+    revision = {"revision": "a1", "perspective": "p_main", "stage": "review"}
     routes["GET", f"{KMA}/v2/build"] = ok(
         {
             "reader_registered": True,
             "reader": {"model": "m"},
             "domain": {"id": "rates"},
             "builds": [{"build": "b1", "awaiting": "accept_variables"}],
-            "refits": [{"r": 1}],
-            "revisions": [],
+            "refits": [refit],
+            "revisions": [revision],
             "published": None,
             "domain_sources": 54,
             "worker": {"state": "watching"},
@@ -653,6 +721,8 @@ async def test_get_kma_builds_leaves_out_refits_and_revisions(api: FakeApi):
         "domain_sources": 54,
         "published": None,
         "builds": [{"build": "b1", "awaiting": "accept_variables"}],
+        "refits": [refit],
+        "revisions": [revision],
     }
 
 
@@ -669,6 +739,8 @@ async def test_kma_build_lists_proposals_once_the_variables_are_chosen(api: Fake
             "reader": None,
             "domain": None,
             "builds": [build("S1_variables"), build("S2_definitions")],
+            "refits": [],
+            "revisions": [],
             "published": None,
             "domain_sources": 0,
             "worker": None,
@@ -694,6 +766,64 @@ async def test_get_kma_forecast_before_a_model_is_published(api: FakeApi):
     assert result.structured_content == {"published": False}
 
 
+def belief(**fields: object) -> dict[str, object]:
+    """A case's forecast as GET .../v2/cases/{case_id}/belief returns it."""
+    reading = {
+        "variable": "inflation",
+        "passage": "d1#0",
+        "likelihood": {"rising": 3.0},
+        "source_id": "d1",
+        "quote": "prices rose",
+        "call": "k1",
+    }
+    return {
+        "published": True,
+        "definition_version": 2,
+        "domain": "rates",
+        "case": {"case_id": "c1"},
+        "base_rate": {"source": "elicited"},
+        "admission": [],
+        "perspectives": [{"perspective": "p_main", "evidence": [reading]}],
+        "average": {"hike": 0.6, "hold": 0.4},
+        "facts": [],
+        "readings_waiting": 0,
+        "readings_failed": 1,
+        "failed_calls": ["k2"],
+        "readings_rejected": [],
+        "duplicate_passages": 0,
+        "complete": False,
+        **fields,
+    }
+
+
+async def test_get_kma_forecast_shows_what_a_correction_names(api: FakeApi):
+    routes, _ = api
+    corrections = {"set_aside": [{"call": "k7"}], "owner": [], "retried": []}
+    withdrawn = [{"perspective": "p_main", "documents": ["d0"], "note": "n"}]
+    routes["GET", f"{KMA}/v2/cases/c1/belief"] = ok(
+        belief(reading_corrections=corrections, withdrawn_sources=withdrawn)
+    )
+
+    result = await call_tool("get_kma_forecast", agent_id="a1", case_id="c1")
+
+    content = result.structured_content
+    assert content["perspectives"][0]["evidence"][0]["call"] == "k1"
+    assert content["failed_calls"] == ["k2"]
+    assert content["reading_corrections"] == corrections
+    assert content["withdrawn_sources"] == withdrawn
+
+
+async def test_get_kma_forecast_gives_null_for_no_correction(api: FakeApi):
+    routes, _ = api
+    routes["GET", f"{KMA}/v2/cases/c1/belief"] = ok(belief())
+
+    result = await call_tool("get_kma_forecast", agent_id="a1", case_id="c1")
+
+    content = result.structured_content
+    assert content["reading_corrections"] is None
+    assert content["withdrawn_sources"] is None
+
+
 async def test_freeze_kma_forecast_leaves_out_the_recorded_inputs(api: FakeApi):
     routes, requests = api
     path = f"{DOMAINS}/rates/cases/c1/freeze"
@@ -715,7 +845,30 @@ async def test_freeze_kma_forecast_leaves_out_the_recorded_inputs(api: FakeApi):
     content = result.structured_content
     assert "inputs_snapshot" not in content
     assert content["distribution"] == frozen["distribution"]
+    assert content["withdrawn_sources"] is None
     assert sent(requests, "POST", path) == {"agent": "a1"}
+
+
+async def test_freeze_kma_forecast_keeps_the_withdrawn_source_mark(api: FakeApi):
+    routes, _ = api
+    path = f"{DOMAINS}/rates/cases/c1/freeze"
+    mark = [{"perspective": "p_main", "documents": ["d0"], "repair": "s1"}]
+    routes["POST", path] = ok(
+        {
+            "case_id": "c1",
+            "agent": "a1",
+            "distribution": {"hike": 0.2, "hold": 0.8},
+            "inputs_snapshot": {"calls": {}, "withdrawn_sources": mark},
+        }
+    )
+
+    result = await call_tool(
+        "freeze_kma_forecast", domain_id="rates", case_id="c1", agent_id="a1"
+    )
+
+    content = result.structured_content
+    assert "inputs_snapshot" not in content
+    assert content["withdrawn_sources"] == mark
 
 
 async def test_resolve_kma_case_returns_the_resolution_and_raised_needs(api: FakeApi):

@@ -24,6 +24,8 @@ KNOWLEDGE_AGENT_TOOLS = {
     "add_text_document",
     "delete_document",
     "check_corpus_quality",
+    "list_document_dates",
+    "set_document_publication_date",
 }
 JAM_TOOLS = {
     "list_jams",
@@ -66,6 +68,33 @@ KMA_TOOLS = {
     "invite_to_kma_cohort",
     "remove_from_kma_cohort",
 }
+KMA_HISTORY_TOOLS = {
+    "run_kma_model",
+    "get_kma_run",
+    "get_kma_history",
+    "get_kma_published_version",
+    "get_kma_build_record",
+    "get_kma_frozen_forecast",
+}
+KMA_CORRECTION_TOOLS = {
+    "correct_kma_case_outcome",
+    "retract_kma_case_outcome",
+    "get_kma_stale_outcomes",
+    "set_aside_kma_reading",
+    "give_kma_reading",
+    "restore_kma_reading",
+    "retry_kma_failed_call",
+    "get_kma_reading_corrections",
+    "state_kma_row",
+    "withdraw_kma_answer",
+    "start_kma_revision",
+    "publish_kma_revision",
+    "get_kma_stale_sources",
+    "start_kma_source_repair",
+    "get_kma_source_repair",
+    "publish_kma_source_repair",
+    "publish_kma_refit",
+}
 MODEL_TOOLS = {"run_model", "get_model_version", "get_model_run"}
 
 READ_ONLY = {
@@ -76,6 +105,7 @@ READ_ONLY = {
     "read_document",
     "get_document_status",
     "check_corpus_quality",
+    "list_document_dates",
     "list_jams",
     "get_jam",
     "get_jam_results",
@@ -90,6 +120,15 @@ READ_ONLY = {
     "get_kma_model",
     "get_kma_switches",
     "get_kma_cohort",
+    "get_kma_run",
+    "get_kma_history",
+    "get_kma_published_version",
+    "get_kma_build_record",
+    "get_kma_frozen_forecast",
+    "get_kma_stale_outcomes",
+    "get_kma_reading_corrections",
+    "get_kma_stale_sources",
+    "get_kma_source_repair",
     "get_model_version",
     "get_model_run",
 }
@@ -97,6 +136,7 @@ DESTRUCTIVE = {
     "update_knowledge_agent",
     "set_knowledge_agent_visibility",
     "delete_document",
+    "set_document_publication_date",
     "set_kma_case_profile",
     "review_kma_document",
     "enable_kma",
@@ -104,6 +144,17 @@ DESTRUCTIVE = {
     "decide_kma_build",
     "set_kma_switch",
     "remove_from_kma_cohort",
+    "correct_kma_case_outcome",
+    "retract_kma_case_outcome",
+    "set_aside_kma_reading",
+    "give_kma_reading",
+    "restore_kma_reading",
+    "retry_kma_failed_call",
+    "withdraw_kma_answer",
+    "publish_kma_revision",
+    "start_kma_source_repair",
+    "publish_kma_source_repair",
+    "publish_kma_refit",
 }
 # Not read-only, because they can queue model calls on CrowdSmart's worker.
 QUEUE_ONLY = {"get_kma_builds", "get_kma_forecast", "list_kma_needs"}
@@ -113,7 +164,14 @@ async def test_server_offers_only_the_curated_tools():
     async with Client(server.mcp) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert set(tools) == KNOWLEDGE_AGENT_TOOLS | JAM_TOOLS | KMA_TOOLS | MODEL_TOOLS
+    assert set(tools) == (
+        KNOWLEDGE_AGENT_TOOLS
+        | JAM_TOOLS
+        | KMA_TOOLS
+        | KMA_HISTORY_TOOLS
+        | KMA_CORRECTION_TOOLS
+        | MODEL_TOOLS
+    )
     hints = {
         name: tool.annotations
         for name, tool in tools.items()
@@ -205,6 +263,25 @@ async def test_unexpected_responses_are_reported(
             "ask_knowledge_agent",
             {"agent_id": "../human-auth/api-key#", "question": "q"},
         ),
+        ("ask_knowledge_agent", {"agent_id": "a1", "question": "q", "as_of": ""}),
+        (
+            "ask_knowledge_agent",
+            {"agent_id": "a1", "question": "q", "as_of": "2026-06-30T00:00:00"},
+        ),
+        ("list_document_dates", {"agent_id": "a1/../../human-auth"}),
+        (
+            "set_document_publication_date",
+            {"agent_id": "a1", "document_id": "d1#", "published": None, "reason": "r"},
+        ),
+        (
+            "set_document_publication_date",
+            {
+                "agent_id": "a1",
+                "document_id": "d1",
+                "published": "14 March",
+                "reason": "r",
+            },
+        ),
         (
             "delete_document",
             {"agent_id": "a1", "document_id": "../../a1?force_delete=true"},
@@ -225,6 +302,42 @@ async def test_unexpected_responses_are_reported(
         ),
         ("get_model_version", {"version_id": "v1/../../models"}),
         ("get_model_run", {"run_id": "r1?caller=x#"}),
+        ("get_kma_run", {"agent_id": "a1", "run_id": "../history"}),
+        ("get_kma_history", {"agent_id": "a1/../../a2"}),
+        (
+            "get_kma_build_record",
+            {"agent_id": "a1", "kind": "build", "record_id": "b1/../../published/1"},
+        ),
+        (
+            "get_kma_build_record",
+            {"agent_id": "a1", "kind": "plan", "record_id": "b1"},
+        ),
+        (
+            "get_kma_frozen_forecast",
+            {"domain_id": "d1", "case_id": "c1/../c2", "agent_id": "a1"},
+        ),
+        (
+            "correct_kma_case_outcome",
+            {
+                "domain_id": "d1",
+                "case_id": "c1/../../c2/resolve#",
+                "state": "s",
+                "source": "s",
+                "date": "2026-10-28",
+                "reason": "r",
+                "replaces": 1,
+            },
+        ),
+        (
+            "set_aside_kma_reading",
+            {"agent_id": "a1", "case_id": "c1?x=1", "call": "k", "reason": "r"},
+        ),
+        (
+            "publish_kma_revision",
+            {"agent_id": "a1", "revision_id": "a1/../../refit/r1", "model_sha256": "m"},
+        ),
+        ("get_kma_source_repair", {"agent_id": "a1", "repair_id": "../stale"}),
+        ("publish_kma_refit", {"agent_id": "a1", "refit_id": "r1/../../revise"}),
     ],
 )
 async def test_invalid_arguments_send_no_request(

@@ -10,7 +10,9 @@ Knowledge Agents (KAs) answer questions from their own documents. Find them with
 list_knowledge_agents and ask with ask_knowledge_agent. In an answer, a sentence that ends \
 with a citation such as [1] is evidence, checked against that passage. A sentence without a \
 citation is the agent's reasoning, which is not checked. Use read_document to check a cited \
-source. ask_knowledge_agent with verbose shows the evidence checks, passage counts and settings.
+source. ask_knowledge_agent with verbose shows the evidence checks, passage counts and settings. \
+ask_knowledge_agent with as_of answers only from the documents published on or before that \
+day (list_document_dates shows the dates): show its notices with the answer.
 
 Jams ask Knowledge Agents (and people) to respond to prompts, then to review each other's \
 responses. To have agents discuss a topic, create a few agents with create_knowledge_agent, \
@@ -33,7 +35,18 @@ start_kma_build. A build's model calls run on CrowdSmart's worker: follow it wit
 get_kma_builds and make each decision it waits for with decide_kma_build, only as the \
 user decides. get_kma_forecast gives a KMA's forecast for a case and why; only a forecast \
 frozen before the case resolves (freeze_kma_forecast) is scored (get_kma_scoreboard). \
-Freezing, resolving a case and attaching a KMA to a domain cannot be undone.
+Freezing and attaching a KMA to a domain cannot be undone.
+
+A KMA's owner can read its history and correct it. get_kma_history lists the published \
+versions, builds, refits, revisions and frozen forecasts; get_kma_published_version, \
+get_kma_build_record and get_kma_frozen_forecast return one record whole, which can be \
+large. run_kma_model runs one perspective of a published version with chosen variables \
+fixed, without case evidence. Each kind of fact has its own correction tools: a case's \
+outcome, a reading, a probability row or answer, and a source. A correction tool with \
+preview returns its report and writes nothing: show the report, and set preview to false \
+only when the user accepts it. If CrowdSmart refuses a correction because the fact \
+changed, read the fact again. Publish a source repair's build only with \
+publish_kma_source_repair. No correction changes a frozen forecast.
 
 Models: run_model runs a model version on evidence and returns every variable's \
 probabilities with a run_id; get_model_version returns the exact version; get_model_run \

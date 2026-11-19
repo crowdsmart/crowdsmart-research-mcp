@@ -2,7 +2,7 @@
 
 An MCP server for CrowdSmart. It connects an MCP client (for example Claude Desktop, Claude Code, Cursor or Hermes) to the CrowdSmart research platform (csgcip). It authenticates with your own CrowdSmart API key.
 
-The server has 54 tools. They cover four workflows:
+The server has 79 tools. They cover four workflows:
 
 - Knowledge Agents that answer questions from their documents.
 - Jams in which Knowledge Agents discuss a topic.
@@ -19,7 +19,7 @@ Each tool tells the client what it does to your CrowdSmart data (MCP tool annota
 |---|---|
 | Reads | Changes nothing |
 | Adds | Adds a record, for example a document or a Jam |
-| Replaces | Replaces or deletes settings, a document, a review, a case profile value or a build |
+| Replaces | Replaces or deletes settings, a document, a review, a case profile value or a build, or applies a correction that changes what counts |
 | Queues | Changes nothing that you see, but can queue model calls on CrowdSmart's worker. A repeated call queues nothing new |
 
 ### Knowledge Agents
@@ -34,12 +34,14 @@ A Knowledge Agent answers questions from its own documents.
 | `create_knowledge_agent` | Creates a private agent with no documents | Adds |
 | `update_knowledge_agent` | Changes the name, headline, instructions or mode of your agent | Replaces |
 | `set_knowledge_agent_visibility` | Sets who can ask your agent | Replaces |
-| `ask_knowledge_agent` | Asks an agent a question. The answer cites the agent's documents and has a confidence score. With `verbose`, it also shows the evidence checks, passage counts and settings | Adds the question to the agent's query history |
+| `ask_knowledge_agent` | Asks an agent a question. The answer cites the agent's documents and has a confidence score. With `as_of`, it answers only from the documents published on or before that day. With `verbose`, it also shows the evidence checks, passage counts and settings | Adds the question to the agent's query history |
 | `list_documents` | Lists the documents of an agent | Reads |
 | `read_document` | Returns the text of a document, for example to check a citation | Reads |
 | `upload_document` | Uploads a file from this computer to your agent, then waits for its text | Adds |
 | `get_document_status` | Shows whether the text of an uploaded document is ready, or why it failed | Reads |
 | `add_text_document` | Adds text with its source (URL, author, date) to your agent | Adds |
+| `list_document_dates` | Lists the publication date of each document of an agent, or why it has none | Reads |
+| `set_document_publication_date` | States or withdraws the publication date of a document of your agent, with the reason | Replaces |
 | `delete_document` | Deletes a document from your agent. You cannot undo this | Replaces |
 | `check_corpus_quality` | Finds damaged documents: broken lines, garbled OCR, split words and near-duplicates | Reads |
 
@@ -48,6 +50,8 @@ In a generative answer, a sentence that ends with a citation such as `[1]` is ev
 Set `verbose` to check or repeat an answer. The response then also has the check result of each sentence (`evidence`), the number of passages requested and returned (`passages`), the `chunk_id` and scores of each citation, and the settings CrowdSmart reports (`decision_trace`, `effective_config`, `interaction_id`).
 
 `confidence` is a retrieval score from 0 to 1: how well the best passages match the question. A high value shows that the documents match the question. It does not show that the answer is correct.
+
+To ask as of a past day, give `as_of` as `YYYY-MM-DD`. The agent then reads only its documents with a publication date on or before that day, in the text that it holds now. It does not read later or undated documents, and it does not use the model's general knowledge. A sentence without a citation is still the model's reasoning, which is not limited to that day. The answer has `notices` that say how many documents it read and left out: show them with the answer. If no document is dated on or before the day, the answer says so and no model is called. That shows a gap in the documents, not an answer to the question. `list_document_dates` shows the dates. `set_document_publication_date` states a date as a day, a month or a year. A month or a year counts as its last day.
 
 ### Jams
 
@@ -87,11 +91,11 @@ A KMA is a Knowledge Agent with one or more perspective models. Each model is a 
 | Tool | What it does | Effect |
 |---|---|---|
 | `list_kma_domains` | Lists every domain, with its outcome, cases and KMAs | Reads |
-| `get_kma_domain` | Shows a domain: its outcome, case fields, base-rate table, cases and KMAs | Reads |
+| `get_kma_domain` | Shows a domain: its outcome, case fields, base-rate table, cases and KMAs. Each resolved case has `resolved_at`, which a correction of its outcome names. A corrected case lists the outcomes it replaced in `resolution_history` | Reads |
 | `create_kma_domain` | Creates a domain that you own | Adds |
 | `add_kma_case` | Adds a case to a domain. You cannot remove a case | Adds |
 | `set_kma_case_profile` | Sets one profile field of an open case, for example its subject | Replaces |
-| `resolve_kma_case` | Records the outcome of a case. You cannot undo this | Adds |
+| `resolve_kma_case` | Records the outcome of a case. To fix a wrong outcome, see [KMA corrections](#kma-corrections) | Adds |
 | `mark_kma_case_unscored` | Marks a case as not scored, for example when the decision came before the freeze. You cannot undo this | Adds |
 | `get_kma_scoreboard` | Scores the frozen forecasts of a domain: hits, Brier score and log loss, by KMA | Reads |
 | `list_kmas` | Lists your KMAs, with their domains | Reads |
@@ -104,10 +108,10 @@ A KMA is a Knowledge Agent with one or more perspective models. Each model is a 
 | `tag_kma_document` | Tags a document as a domain source or as evidence for one case | Replaces |
 | `check_kma_build_preflight` | Checks the reader, the worker, the domain and the sources before a build | Reads |
 | `start_kma_build` | Starts the build of one perspective model | Adds |
-| `get_kma_builds` | Shows each build: its stage, and the decision it waits for | Queues |
+| `get_kma_builds` | Shows each build: its stage, and the decision it waits for. It also shows each refit and revision with its stage | Queues |
 | `decide_kma_build` | Makes your decision at a stage of a build: variables, definitions, structure, publish, stop or revise | Replaces |
 | `get_kma_forecast` | Shows the current forecast of a KMA for a case, and the readings behind it | Queues |
-| `get_kma_model` | Shows the published models of a KMA: variables, links and priors | Reads |
+| `get_kma_model` | Shows the published models of a KMA: variables, links and priors. With `version`, it shows them as published at that version | Reads |
 | `freeze_kma_forecast` | Freezes the forecast of a KMA for a case. Only frozen forecasts are scored. You cannot undo this | Adds |
 | `get_kma_switches` | Shows the adaptive switches of a KMA, and their history | Reads |
 | `set_kma_switch` | Sets an adaptive switch of a KMA, with the reason | Replaces |
@@ -127,13 +131,63 @@ To build a KMA and forecast a case:
 6. Check the KMA with `check_kma_build_preflight`. Then start the build with `start_kma_build`, with a perspective name and a brief.
 7. Follow the build with `get_kma_builds`. When it waits for you, decide with `decide_kma_build`: choose the variables, check the structure, then publish. Each build lists the actions it accepts now in `next_actions`. To reject a structure, stop or revise the build. If it waits for `take_published`, another perspective was published with a different definition of one of its variables: revise or stop the build.
 8. Read the forecast for a case with `get_kma_forecast`. When no readings wait, freeze it with `freeze_kma_forecast`.
-9. When the case resolves, record the outcome with `resolve_kma_case`. Then compare the scores with `get_kma_scoreboard`.
+9. When the case resolves, record the outcome with `resolve_kma_case`. Then compare the scores with `get_kma_scoreboard`. To fix a wrong outcome, a wrong reading, a probability or a source later, see [KMA corrections](#kma-corrections).
 
 A KMA reads only approved documents. When you approve the last unreviewed document of a KMA, CrowdSmart also starts its older concept and network generation, which makes model calls.
 
 The build decisions belong to the KMA's owner. An agent that uses these tools makes a decision only when the user makes it.
 
 A panel is three or four KMAs on one domain, one for each perspective. The panel forecast is the mean of the frozen forecasts of its members. Compare a panel with the base rate and with its best member. The mean of members that disagree always scores better than the members do on average, so this gain alone does not show skill.
+
+### KMA history and model runs
+
+Each time a KMA publishes (a build, a refit, a revision or a rollback), CrowdSmart stores a new numbered version of its definition, sealed with a checksum. CrowdSmart does not change or delete a version.
+
+| Tool | What it does | Effect |
+|---|---|---|
+| `run_kma_model` | Runs one perspective of a published version with chosen variables fixed, and returns the probabilities of every variable with a receipt. It reads no case evidence | Adds a run receipt |
+| `get_kma_run` | Returns the receipt of a past run. Only the person who made the run can read it | Reads |
+| `get_kma_history` | Lists the published versions, builds, refits, revisions, rollbacks and frozen forecasts of your KMA | Reads |
+| `get_kma_published_version` | Returns one published version of the definition of your KMA, as sealed | Reads |
+| `get_kma_build_record` | Returns a build, a refit or a revision of your KMA in full | Reads |
+| `get_kma_frozen_forecast` | Returns a frozen forecast of your KMA with the inputs it was made from, and checks that it replays | Reads |
+
+`run_kma_model` runs the model alone. It is not the forecast for a case (`get_kma_forecast`). With no fixed variables, it gives the model's prior. To retry a run safely, give the same `request_key`, as for `run_model`.
+
+The history tools are for the KMA's owner, because the records hold people's answers and the text of sources. Each tool returns the record whole, as CrowdSmart stores it, with its checksums. A record can be hundreds of kilobytes. Some MCP clients save a large result to a file instead of putting it in the conversation. For example, Claude Code does this above 50,000 characters, and the model then reads the file. If the owner withheld the text of a source in a source repair, the history shows its passages by ID and checksum only. Such a reply does not match its checksum, which is of the stored record.
+
+### KMA corrections
+
+A correction changes one fact of a KMA without a new build. Each correction is a new record with its reason and the person who made it. CrowdSmart rewrites no sealed record. A correction never changes a frozen forecast: it can change only the forecast's score.
+
+| Tool | What it does | Effect |
+|---|---|---|
+| `correct_kma_case_outcome` | Corrects the recorded outcome of a case | Replaces, when `preview` is false |
+| `retract_kma_case_outcome` | Takes back an outcome recorded on the wrong case. The case is open again | Replaces, when `preview` is false |
+| `get_kma_stale_outcomes` | Lists what the models of your KMA learned from outcomes that were corrected since | Reads |
+| `set_aside_kma_reading` | Stops one reading from counting in the forecast of a case | Replaces, when `preview` is false |
+| `give_kma_reading` | Gives your own reading of one passage for one variable, in place of the model's | Replaces, when `preview` is false |
+| `restore_kma_reading` | Undoes a reading correction | Replaces, when `preview` is false |
+| `retry_kma_failed_call` | Asks the worker to make a failed reading call again | Replaces and queues a model call, when `preview` is false |
+| `get_kma_reading_corrections` | Lists the reading corrections of your KMA, and what they leave out of date | Reads |
+| `state_kma_row` | States your value for one probability row, with the reason. It publishes nothing | Adds |
+| `withdraw_kma_answer` | Withdraws an answer to a question of a KMA, or a row statement | Replaces |
+| `start_kma_revision` | Fits a published perspective again with the answers in force, and shows the rows that move. It publishes nothing | Adds |
+| `publish_kma_revision` | Publishes a revision exactly as previewed | Replaces |
+| `get_kma_stale_sources` | Lists the documents that the published models or frozen forecasts used and that changed since | Reads |
+| `start_kma_source_repair` | Starts a new build of each perspective that was built from a withdrawn or changed source. With `show_text` false, the history stops showing the text of the source, for good | Replaces |
+| `get_kma_source_repair` | Shows where a source repair stands, its next step and its preview | Reads |
+| `publish_kma_source_repair` | Publishes the new build of one perspective, exactly as previewed | Replaces |
+| `publish_kma_refit` | Publishes a refit, for example the one that a source repair started | Replaces |
+
+A correction tool with `preview` returns a report of what the correction changes and writes nothing. Set `preview` to false only when the owner accepts the report. If the fact changed after the report, CrowdSmart refuses the correction and gives the reason: read the fact again.
+
+To correct:
+
+- **An outcome.** `get_kma_domain` gives the `resolved_at` of each resolved case. Give it as `replaces` to `correct_kma_case_outcome` or `retract_kma_case_outcome`. The replaced outcome stays in the case's `resolution_history`.
+- **A reading.** `get_kma_forecast` gives the `call` of each reading, and the `failed_calls`. Set a reading aside by its call, or give your own reading of the passage with a quote from it.
+- **A probability or an answer.** State a row with `state_kma_row`, or withdraw an answer with `withdraw_kma_answer`. Then start a revision with `start_kma_revision`, check the rows that move, and publish it with `publish_kma_revision` and the `model.sha256` of the revision.
+- **A source.** A document cannot be taken out of a perspective that was built from it. `start_kma_source_repair` builds each such perspective again from the domain sources as they are now. Take each build through its stages with `get_kma_builds` and `decide_kma_build`. Then publish it with `publish_kma_source_repair` and the `model_sha256` of its preview. Do not publish, revise or stop a repair's build with `decide_kma_build`. If the domain has resolved cases, a refit starts. `get_kma_builds` shows when it is ready: then publish it with `publish_kma_refit`. When the KMA's `counts` switch is on, CrowdSmart publishes it itself. `get_kma_source_repair` gives the next step each time. These tools cannot start a refit.
 
 ### Models
 
@@ -192,13 +246,13 @@ If `CROWDSMART_API_KEY` is not set, the server stops at startup and writes the r
 
 ## Scope
 
-The server covers Knowledge Agents, Jams of Knowledge Agents, the build, forecast and scoring of Knowledge Model Agents, and runs of model versions. It does not cover other parts of the CrowdSmart platform. These include:
+The server covers Knowledge Agents, Jams of Knowledge Agents, the build, forecast, scoring, history and corrections of Knowledge Model Agents, and runs of model versions. It does not cover other parts of the CrowdSmart platform. These include:
 
 - Other agent types and research features
 - Taking part in a Jam as a person
 - Jam messages, analytics and exports
 - Housekeeping, for example archiving a Jam or sending its invitations again
-- KMA Jams, refits and revisions, Track and runs, and answers to a KMA's questions
+- KMA Jams, starting a refit, rollbacks, Track and the scheduled runs of a domain, and answering a KMA's questions
 - Schedules: a domain's jobs that collect evidence, freeze and resolve cases at set times. Your MCP client can do these steps with the tools above
 
 Use the CrowdSmart app for these features.
@@ -213,7 +267,7 @@ uv run ruff format --check src tests
 uv run basedpyright
 ```
 
-The tests use a fake API and an in-process MCP client. Each tool module (`knowledge_agents.py`, `jams.py`, `kmas.py`, `models.py`) has a test file. To list the tools of the real server with the MCP Inspector, run this command once with `--protocol-era modern` and once with `--protocol-era legacy`:
+The tests use a fake API and an in-process MCP client. Each tool module (`knowledge_agents.py`, `jams.py`, `kmas.py`, `kma_history.py`, `kma_corrections.py`, `models.py`) has a test file. To list the tools of the real server with the MCP Inspector, run this command once with `--protocol-era modern` and once with `--protocol-era legacy`:
 
 ```sh
 npx @modelcontextprotocol/inspector --cli -e CROWDSMART_API_KEY=crc_any \

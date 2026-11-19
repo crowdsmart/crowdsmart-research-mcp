@@ -21,6 +21,12 @@ AGENTS = "/api/knowledge-agents"
 MODES = {"generative": "foundation_assisted", "referenced": "strict_corpus"}
 Mode = Literal["generative", "referenced"]
 
+# A day for an answer as of a date. An empty or partial value is refused here, because
+# the API takes an empty one as no date and would give an ordinary answer.
+Day = Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
+# A publication date: a day (2026-03-14), a month (2026-03) or a year (2026).
+PublicationDate = Annotated[str, Field(pattern=r"^\d{4}(-\d{2}(-\d{2})?)?$")]
+
 # How long upload_document waits for text extraction: under the 60-second request
 # timeout that many MCP clients use, so that the client still gets the document_id.
 UPLOAD_WAIT_SECONDS = 45
@@ -234,6 +240,7 @@ async def ask_knowledge_agent(
     mode: Mode | None = None,
     max_chunks: int = 5,
     verbose: bool = False,
+    as_of: Day | None = None,
 ) -> dict[str, Any]:
     """Ask a Knowledge Agent a question and get an answer from its documents, with citations.
 
@@ -252,6 +259,19 @@ async def ask_knowledge_agent(
     without earlier questions as context. CrowdSmart records each question in
     the agent's query history.
 
+    as_of gives the answer as of a past day. The agent then reads only its
+    documents with a publication date on or before that day, as they are stored
+    now. It leaves out later and undated documents, and it does not use the
+    model's general knowledge. A sentence without a citation is still the
+    model's reasoning, which is not limited to that day. list_document_dates
+    shows the dates. When no document is dated on or before the day, the answer
+    says so and no model is called ("generation_source": "none"): that is a gap
+    in the documents, not an answer to the question.
+
+    "notices" holds what CrowdSmart tells the reader about this answer, for
+    example how many documents an as-of answer left out. Show each notice with
+    the answer. The reply has "notices" only when there is one.
+
     verbose adds the details needed to check or repeat an answer:
     - "evidence": each written sentence, as "evidence" (with its passage number,
       quote, chunk_id and check "status": "verified", "quote_used" when the exact
@@ -264,7 +284,9 @@ async def ask_knowledge_agent(
     - each citation's chunk_id, "similarity" and "relevance_probability".
     - "decision_trace" (why the agent answered, declined or fell back),
       "effective_config" (the settings applied, when CrowdSmart reports them)
-      and "interaction_id" (the recorded question). Each is null if absent.
+      and "interaction_id" (the recorded question). Each is null if absent. For
+      an as-of answer, "effective_config"."as_of" records the day, the counts of
+      documents read and left out, and the digests of the document set.
 
     Args:
         agent_id: Knowledge Agent ID, from list_knowledge_agents.
@@ -273,10 +295,14 @@ async def ask_knowledge_agent(
         max_chunks: Number of passages to retrieve (default 5).
         verbose: Add the evidence record, passage counts and settings (default
             false). The response is longer.
+        as_of: A day, as YYYY-MM-DD: answer only from the documents published
+            on or before it. Omit for an ordinary answer.
     """
     body: dict[str, Any] = {"question": question, "max_chunks": max_chunks}
     if mode is not None:
         body["query_generation_mode"] = MODES[mode]
+    if as_of is not None:
+        body["as_of"] = as_of
     result = await api.call("POST", f"{AGENTS}/{agent_id}/query", json=body)
     answer = {
         "answer": result["answer"],
@@ -285,6 +311,8 @@ async def ask_knowledge_agent(
         "generation_source": result["generation_source"],
         "knowledge_source": result.get("knowledge_source") or "documents",
     }
+    if result.get("notices"):
+        answer["notices"] = result["notices"]
     if verbose:
         answer["evidence"] = result.get("evidence")
         answer["passages"] = {
@@ -406,7 +434,10 @@ async def add_text_document(
     """Add text to a Knowledge Agent you own, as a new document that keeps its source.
 
     The text is split into passages and can be asked about at once. The source
-    details are stored with every passage, for citations.
+    details are stored with every passage, for citations. The reply gives the
+    publication date that the timestamp set ("published"), or why it set none
+    ("published_note"). With no timestamp, both are null. To state or change
+    the date later, use set_document_publication_date.
 
     Args:
         agent_id: ID of a Knowledge Agent you own.
@@ -414,7 +445,10 @@ async def add_text_document(
         text: The text to add.
         source_url: URL of the original source.
         author: Author of the original source.
-        timestamp: ISO 8601 date when the source was published or created.
+        timestamp: The day the source was published, as YYYY-MM-DD. It becomes
+            the document's publication date, which ask_knowledge_agent's as_of
+            uses. A date with a time is kept with the source but sets no
+            publication date.
         source_type: Kind of source, for example "web", "note", "transcript" or "email".
     """
     body = {
@@ -426,6 +460,57 @@ async def add_text_document(
         "source_type": source_type,
     }
     return await api.call("POST", f"{AGENTS}/{agent_id}/text", json=body)
+
+
+@mcp.tool(annotations=READS)
+async def list_document_dates(agent_id: Id) -> dict[str, Any]:
+    """List the publication date of each document of a Knowledge Agent, or why it has none.
+
+    ask_knowledge_agent with as_of reads only the documents with a date on or
+    before its day, so use this first to see how much of the agent is dated.
+    Each dated document has its date as stated ("published": a day, a month or
+    a year), the day it counts as ("counts_as": a month or a year counts as its
+    last day) and where the date comes from ("source"). An undated document has
+    "why" instead. "dated" and "undated" count them. A date belongs to the text
+    that the document holds now.
+
+    Args:
+        agent_id: Knowledge Agent ID.
+    """
+    return await api.call("GET", f"{AGENTS}/{agent_id}/document-dates")
+
+
+@mcp.tool(annotations=CHANGES)
+async def set_document_publication_date(
+    agent_id: Id,
+    document_id: Id,
+    published: PublicationDate | None,
+    reason: str,
+) -> dict[str, Any]:
+    """State the publication date of a document of a Knowledge Agent you own, or withdraw it.
+
+    ask_knowledge_agent with as_of uses this date. Each call adds a record with
+    who stated the date and why. The new date replaces the date in force, and
+    the earlier one stays on record. The date belongs to the text that the
+    document holds now: if that text is replaced, the date no longer applies.
+    For a KMA's document, this date takes the place of the date given with
+    tag_kma_document in as-of answers only. The KMA itself keeps using its
+    tag's date.
+
+    Args:
+        agent_id: ID of a Knowledge Agent you own.
+        document_id: Document ID, from list_documents or list_document_dates.
+        published: The publication date: a day (2026-03-14), a month (2026-03)
+            or a year (2026). A month or a year counts as its last day. null
+            withdraws the date, and the document is then undated.
+        reason: Where the date comes from, or why it is withdrawn. It cannot be
+            empty.
+    """
+    return await api.call(
+        "POST",
+        f"{AGENTS}/{agent_id}/documents/{document_id}/date",
+        json={"published": published, "reason": reason},
+    )
 
 
 @mcp.tool(annotations=CHANGES)

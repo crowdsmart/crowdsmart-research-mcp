@@ -91,7 +91,11 @@ async def get_kma_domain(domain_id: Id) -> dict[str, Any]:
     once decided, its resolution or why it is not scored. "practice" cases are
     forecast and resolved like the others but never scored. The base-rate table
     is summarized: its rules and number of rows. "subject_field" is the profile
-    field that names each case's subject, or null.
+    field that names each case's subject, or null. A resolved case has
+    "resolved_at": the position of its outcome in the domain's record, which
+    correct_kma_case_outcome and retract_kma_case_outcome name.
+    "resolution_history" lists the outcomes that a correction or a retraction
+    replaced, with who replaced them, when ("replaced_at") and why.
 
     Args:
         domain_id: Domain ID, from list_kma_domains.
@@ -100,6 +104,7 @@ async def get_kma_domain(domain_id: Id) -> dict[str, Any]:
         api.me(), api.call("GET", f"{DOMAINS}/{domain_id}")
     )
     domain = state["domain"]
+    resolved_at: dict[str, int] = state["resolved_at"]
     return {
         "id": domain["id"],
         "name": domain["name"],
@@ -110,7 +115,14 @@ async def get_kma_domain(domain_id: Id) -> dict[str, Any]:
         "subject_field": domain.get("subject_field"),
         "template_fields": domain.get("template_fields") or [],
         "base_rate": _base_rate_summary(domain.get("base_rate")),
-        "cases": [_case(case) for case in state["cases"].values()],
+        "cases": [
+            {
+                **_case(case),
+                "resolved_at": resolved_at.get(case_id),
+                "resolution_history": case.get("resolution_history") or [],
+            }
+            for case_id, case in state["cases"].items()
+        ],
         "kma_ids": state["kmas"],
     }
 
@@ -254,10 +266,12 @@ async def set_kma_case_profile(
 async def resolve_kma_case(
     domain_id: Id, case_id: Id, state: str, source: str, date: str
 ) -> dict[str, Any]:
-    """Record a case's outcome. This cannot be undone or changed.
+    """Record a case's outcome.
 
     Frozen forecasts of the case are then scored (get_kma_scoreboard). A KMA whose
-    forecast was surprised by the outcome can raise needs (list_kma_needs).
+    forecast was surprised by the outcome can raise needs (list_kma_needs). An
+    outcome recorded wrongly is not edited: correct_kma_case_outcome or
+    retract_kma_case_outcome replaces it with a new record.
 
     Args:
         domain_id: A domain you own.
@@ -761,6 +775,9 @@ async def get_kma_builds(agent_id: Id) -> dict[str, Any]:
       revise it from the variables.
     "awaiting" is null while "waiting" calls are with CrowdSmart's worker. Asking
     works out each build's state, which queues any model calls it now needs.
+    "refits" and "revisions" show each refit and revision with its "stage". A
+    refit is "waiting" while its readings are with the worker (asking queues
+    them too), then "review" when publish_kma_refit can publish it.
     "published" shows the KMA's published perspectives, and "worker" the
     worker's last report.
 
@@ -775,6 +792,8 @@ async def get_kma_builds(agent_id: Id) -> dict[str, Any]:
         "domain_sources": status["domain_sources"],
         "published": status["published"],
         "builds": [_build(build) for build in status["builds"]],
+        "refits": status["refits"],
+        "revisions": status["revisions"],
     }
 
 
@@ -818,6 +837,10 @@ async def decide_kma_build(
       if it is open. The result is the new build. Use it when the build awaits
       "take_published" or "stop_or_restart", or to rebuild a published
       perspective.
+    A build that a source repair started belongs to the repair. Publish it with
+    publish_kma_source_repair, not here: "publish" here skips the repair's
+    preview check and its refit. "stop" or "revise" ends the repair for the
+    perspective.
 
     Args:
         agent_id: ID of a KMA you own.
@@ -857,11 +880,18 @@ async def get_kma_forecast(agent_id: Id, case_id: Id) -> dict[str, Any]:
     no matching base-rate row). For each perspective model: "prior" (before
     reading), "forecast" (after reading) and "evidence": each reading of an
     admitted passage, with the variable, the state likelihoods, the source
-    document and the quote. "average" is the KMA's forecast: the mean of its
-    models. "admission" shows which documents were admitted or set aside, and
-    why. "readings_waiting" counts passages not yet read: asking queues their
-    readings on CrowdSmart's worker, so ask again later. The forecast counts
-    only once frozen (freeze_kma_forecast).
+    document, the quote and the recorded "call" that made it ("read_by":
+    "person" marks the owner's own reading). "average" is the KMA's forecast:
+    the mean of its models. "admission" shows which documents were admitted or
+    set aside, and why. "readings_waiting" counts passages not yet read: asking
+    queues their readings on CrowdSmart's worker, so ask again later. The
+    forecast counts only once frozen (freeze_kma_forecast).
+
+    For corrections: "failed_calls" lists the calls that failed, which
+    retry_kma_failed_call can ask for again. "reading_corrections" shows the
+    reading corrections that apply to this case, and "withdrawn_sources" the
+    perspectives built from a source document since withdrawn or changed (see
+    get_kma_stale_sources). Each of these two is null when there is none.
 
     Args:
         agent_id: KMA ID, from list_kmas or a domain's kma_ids.
@@ -883,21 +913,30 @@ async def get_kma_forecast(agent_id: Id, case_id: Id) -> dict[str, Any]:
         "readings_failed": belief["readings_failed"],
         "readings_rejected": belief["readings_rejected"],
         "complete": belief["complete"],
+        "failed_calls": belief["failed_calls"],
+        "reading_corrections": belief.get("reading_corrections"),
+        "withdrawn_sources": belief.get("withdrawn_sources"),
     }
 
 
 @mcp.tool(annotations=READS)
-async def get_kma_model(agent_id: Id) -> dict[str, Any]:
+async def get_kma_model(agent_id: Id, version: int | None = None) -> dict[str, Any]:
     """Show a KMA's published models: each perspective's network.
 
     For each perspective: its variables ("nodes") with their states, definitions
     and parents, the outcome's prior, and each variable's "relevance": how far
-    that variable alone can move the outcome.
+    that variable alone can move the outcome. The top-level "version" is the
+    number of the published definition shown. Each publication (a build, a
+    refit, a revision, a rollback or a copy from another KMA) adds a version,
+    from 1 up, and no version changes later.
 
     Args:
         agent_id: KMA ID.
+        version: A published version number, to see the models as published
+            then. Omit for the latest.
     """
-    return await api.call("GET", f"{_kma(agent_id)}/v2/model")
+    params = {} if version is None else {"version": version}
+    return await api.call("GET", f"{_kma(agent_id)}/v2/model", params=params)
 
 
 @mcp.tool(annotations=ADDS)
@@ -909,6 +948,9 @@ async def freeze_kma_forecast(
     Only frozen forecasts are scored, and a KMA freezes a case once. Freezing
     fails while readings are still waiting: check get_kma_forecast first. Failed
     or rejected readings count as no evidence and are recorded with the freeze.
+    "withdrawn_sources" names the perspectives that were built from a source
+    since withdrawn or changed, as the freeze recorded them, or is null. A
+    later repair does not change a frozen forecast.
 
     Args:
         domain_id: The KMA's domain.
@@ -933,7 +975,12 @@ async def freeze_kma_forecast(
         "definition_version",
         "method_version",
     )
-    return {key: frozen.get(key) for key in keys}
+    # The mark is sealed with the recorded inputs, which this receipt leaves out.
+    inputs: dict[str, Any] = frozen.get("inputs_snapshot") or {}
+    return {
+        **{key: frozen.get(key) for key in keys},
+        "withdrawn_sources": inputs.get("withdrawn_sources"),
+    }
 
 
 # ---------------------------------------------------------------------------------------

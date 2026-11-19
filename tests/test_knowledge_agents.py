@@ -260,6 +260,7 @@ async def test_ask_knowledge_agent_returns_answer_citations_and_confidence(
             "generation_source": "open_weight_api",
             "knowledge_source": None,
             "evidence": {"mode": "evidence_v4", "parsed": True, "sentences": []},
+            "notices": [],
         }
     )
 
@@ -388,6 +389,181 @@ async def test_ask_knowledge_agent_verbose_reports_absent_details_as_null(
     assert content["decision_trace"] is None
     assert content["effective_config"] is None
     assert content["interaction_id"] is None
+
+
+AS_OF_NOTICE = (
+    "Answered as of 30 June 2026, from the 2 of this KA's 5 documents published on or "
+    + "before that date. 1 was published later and 2 have no publication date; none of "
+    + "those was read. Sentences without a citation are the model's reasoning and are "
+    + "not limited to that date."
+)
+
+
+async def test_an_as_of_answer_with_no_dated_document_shows_its_notice(api: FakeApi):
+    routes, _ = api
+    nothing_read = (
+        "No document of this Knowledge Agent has a publication date on or before that "
+        + "day, so nothing was read and no model was called."
+    )
+    notice = (
+        "Answered as of 1 January 2020, from the 0 of this KA's 5 documents published "
+        + "on or before that date. 3 were published later and 2 have no publication "
+        + "date; none of those was read. Sentences without a citation are the model's "
+        + "reasoning and are not limited to that date."
+    )
+    routes["POST", f"{AGENTS}/a1/query"] = ok(
+        {
+            "answer": nothing_read,
+            "citations": [],
+            "confidence": 0.0,
+            "generation_source": "none",
+            "decision_trace": {"reason": "no_document_admitted", "degraded": False},
+            "effective_config": {"as_of": {"as_of": "2020-01-01"}},
+            "notices": [notice],
+        }
+    )
+
+    result = await call_tool(
+        "ask_knowledge_agent", agent_id="a1", question="Rates?", as_of="2020-01-01"
+    )
+
+    assert result.structured_content == {
+        "answer": nothing_read,
+        "citations": [],
+        "confidence": 0.0,
+        "generation_source": "none",
+        "knowledge_source": "documents",
+        "notices": [notice],
+    }
+
+
+async def test_ask_knowledge_agent_as_of_sends_the_day_and_shows_the_notice(
+    api: FakeApi,
+):
+    routes, requests = api
+    as_of = {"as_of": "2026-06-30", "counts": {"admitted": 2, "undated": 2}}
+    routes["POST", f"{AGENTS}/a1/query"] = ok(
+        {
+            "answer": "Rates held [1].",
+            "citations": [],
+            "confidence": 0.7,
+            "generation_source": "open_weight_api",
+            "knowledge_source": None,
+            "effective_config": {"as_of": as_of},
+            "notices": [AS_OF_NOTICE],
+        }
+    )
+
+    result = await call_tool(
+        "ask_knowledge_agent", agent_id="a1", question="Rates?", as_of="2026-06-30"
+    )
+
+    assert sent(requests, "POST", f"{AGENTS}/a1/query") == {
+        "question": "Rates?",
+        "max_chunks": 5,
+        "as_of": "2026-06-30",
+    }
+    assert result.structured_content == {
+        "answer": "Rates held [1].",
+        "citations": [],
+        "confidence": 0.7,
+        "generation_source": "open_weight_api",
+        "knowledge_source": "documents",
+        "notices": [AS_OF_NOTICE],
+    }
+
+
+async def test_ask_knowledge_agent_verbose_keeps_the_as_of_record(api: FakeApi):
+    routes, _ = api
+    as_of = {"as_of": "2026-06-30", "admitted_sha256": "a" * 64, "set_sha256": "s" * 64}
+    routes["POST", f"{AGENTS}/a1/query"] = ok(
+        {
+            "answer": "No document of this Knowledge Agent has a publication date...",
+            "citations": [],
+            "confidence": 0.0,
+            "generation_source": "none",
+            "effective_config": {"as_of": as_of},
+            "notices": [AS_OF_NOTICE],
+        }
+    )
+
+    result = await call_tool(
+        "ask_knowledge_agent",
+        agent_id="a1",
+        question="Rates?",
+        as_of="2026-06-30",
+        verbose=True,
+    )
+
+    content = result.structured_content
+    assert content is not None
+    assert content["effective_config"] == {"as_of": as_of}
+    assert content["notices"] == [AS_OF_NOTICE]
+
+
+async def test_list_document_dates_returns_each_documents_date(api: FakeApi):
+    routes, requests = api
+    dates = {
+        "agent_id": "a1",
+        "documents": [
+            {
+                "document": "d1",
+                "published": "2026-03",
+                "date_precision": "month",
+                "counts_as": "2026-03-31",
+                "source": "owner",
+            },
+            {"document": "d2", "why": "no publication date is stated for its text"},
+        ],
+        "dated": 1,
+        "undated": 1,
+    }
+    routes["GET", f"{AGENTS}/a1/document-dates"] = ok(dates)
+
+    result = await call_tool("list_document_dates", agent_id="a1")
+
+    assert [r.url.path for r in requests] == [f"{AGENTS}/a1/document-dates"]
+    assert result.structured_content == dates
+
+
+@pytest.mark.parametrize("published", ["2026-03-14", "2026-03", "2026", None])
+async def test_set_document_publication_date_sends_the_date_and_the_reason(
+    api: FakeApi, published: str | None
+):
+    routes, requests = api
+    path = f"{AGENTS}/a1/documents/d1/date"
+    stated = {"document": "d1", "published": published, "source": "owner"}
+    routes["POST", path] = ok(stated)
+
+    result = await call_tool(
+        "set_document_publication_date",
+        agent_id="a1",
+        document_id="d1",
+        published=published,
+        reason="the date on the report's cover",
+    )
+
+    assert sent(requests, "POST", path) == {
+        "published": published,
+        "reason": "the date on the report's cover",
+    }
+    assert result.structured_content == stated
+
+
+async def test_set_document_publication_date_never_withdraws_by_omission(
+    api: FakeApi,
+):
+    _, requests = api
+
+    result = await call_tool(
+        "set_document_publication_date",
+        agent_id="a1",
+        document_id="d1",
+        reason="r",
+    )
+
+    assert result.is_error
+    assert requests == []
 
 
 async def test_ask_knowledge_agent_sends_the_api_name_of_a_mode(api: FakeApi):
@@ -566,7 +742,14 @@ async def test_upload_document_reports_a_file_it_cannot_read(
 
 async def test_add_text_document_sends_text_and_source(api: FakeApi):
     routes, requests = api
-    created = {"success": True, "document_id": "d9", "title": "Note", "chunk_count": 1}
+    created = {
+        "success": True,
+        "document_id": "d9",
+        "title": "Note",
+        "chunk_count": 1,
+        "published": "2026-03-14",
+        "published_note": None,
+    }
     routes["POST", f"{AGENTS}/a1/text"] = ok(created)
 
     result = await call_tool(
@@ -575,6 +758,7 @@ async def test_add_text_document_sends_text_and_source(api: FakeApi):
         title="Note",
         text="Body",
         source_url="https://example.com/note",
+        timestamp="2026-03-14",
     )
 
     assert sent(requests, "POST", f"{AGENTS}/a1/text") == {
@@ -582,7 +766,7 @@ async def test_add_text_document_sends_text_and_source(api: FakeApi):
         "text": "Body",
         "source_url": "https://example.com/note",
         "author": None,
-        "timestamp": None,
+        "timestamp": "2026-03-14",
         "source_type": None,
     }
     assert result.structured_content == created
